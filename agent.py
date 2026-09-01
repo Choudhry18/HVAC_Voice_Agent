@@ -9,6 +9,7 @@ from livekit.agents import (
     function_tool,
     inference,
 )
+from livekit.agents.beta.tools import EndCallTool
 
 from customer_memory_service import lookup_customer, remember_customer
 from location_service import check_service_location as resolve_service_location
@@ -66,9 +67,15 @@ If the caller reports an emergency guide tell them to contact authorities like 9
 Before the call ends, repeat the problem, property type, name, callback number,
 address, and availability. Ask the caller to confirm that all details are correct.
 After the caller confirms the final details, call remember_customer_record with the confirmed name and a short summary of the current request.
+After remember_customer_record finishes, call end_call. Do not say a separate goodbye before calling end_call.
 Do not promise an appointment. Say that staff will review the request and follow up.
 Keep each response short and conversational.
 """.strip()
+        )
+        self._end_call_tool = EndCallTool(
+            delete_room=True,
+            end_instructions="Thank the caller, say that staff will follow up, and say goodbye.",
+            ignore_on_enter=True,
         )
 
     @function_tool(
@@ -93,7 +100,9 @@ Keep each response short and conversational.
     async def remember_customer_record(
         self, context: RunContext, name: str, request_summary: str
     ) -> dict[str, object]:
-        return await remember_customer(self.phone_number, name, request_summary)
+        result = await remember_customer(self.phone_number, name, request_summary)
+        await self.update_tools([*self.tools, self._end_call_tool])
+        return result
 
 
 server = AgentServer()
