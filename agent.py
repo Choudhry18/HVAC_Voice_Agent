@@ -11,6 +11,7 @@ from livekit.agents import (
 )
 
 from location_service import check_service_location as resolve_service_location
+from weather_service import get_current_weather
 
 load_dotenv()
 
@@ -23,6 +24,10 @@ You are the front-office agent for Summit Air an HVAC company.
 Ask what heating or cooling problem the caller has.
 Ask if the property is residential or commercial.
 Collect the caller's name, callback number, service address, and availability.
+Repeat the caller's name normally to confirm it.
+If the name is unclear, has more than one common spelling, or the caller corrects it, ask the caller to spell the name.
+Read the letters back and ask if the spelling is correct.
+Do not ask every caller to spell a name that is already clear and confirmed.
 When the caller gives a complete service address, call check_service_location.
 Follow the status returned by check_service_location.
 If the status is FIX, ask for the missing or suspicious address information.
@@ -35,6 +40,10 @@ Retry the location check one time if a retry can help.
 If the location check fails again, keep the address exactly as the caller gave it and continue.
 Do not claim that an address is serviceable when the location check does not return a service-area result.
 Do not tell the caller the service-area result until they confirm the standardized address.
+After the caller confirms a validated address, call check_current_weather with the exact coordinates returned by check_service_location.
+Do not estimate coordinates.
+Do not describe the weather unless the caller asks.
+Do not set service priority from weather data.
 If the caller reports an emergency guide tell them to contact authorities like 911. Do not give repair instructions.
 Before the call ends, repeat the problem, property type, name, callback number,
 address, and availability. Ask the caller to confirm that all details are correct.
@@ -50,6 +59,14 @@ Keep each response short and conversational.
         self, context: RunContext, address: str
     ) -> dict[str, object]:
         return await resolve_service_location(address)
+
+    @function_tool(
+        description="Get current weather for validated latitude and longitude coordinates."
+    )
+    async def check_current_weather(
+        self, context: RunContext, latitude: float, longitude: float
+    ) -> dict[str, object]:
+        return await get_current_weather(latitude, longitude)
 
 
 server = AgentServer()

@@ -8,8 +8,8 @@
 - [ ] Add deterministic urgent-condition rules.
 - [ ] Add a configurable service playbook.
 - [ ] Add repeat-caller lookup by phone number.
-- [ ] Add a location and service-area check.
-- [ ] Add a current-weather check.
+- [x] Add a location and service-area check.
+- [x] Add a current-weather check.
 - [ ] Add manually maintained technician and capacity records.
 - [ ] Add service-window search and selection.
 - [ ] Add final detail read-back and explicit confirmation control.
