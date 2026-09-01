@@ -10,6 +10,7 @@ from livekit.agents import (
     inference,
 )
 
+from customer_memory_service import lookup_customer, remember_customer
 from location_service import check_service_location as resolve_service_location
 from weather_service import get_current_weather
 
@@ -17,10 +18,27 @@ load_dotenv()
 
 
 class HVACFrontDeskAgent(Agent):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        phone_number: str | None = None,
+        previous_customer: dict[str, object] | None = None,
+    ) -> None:
+        self.phone_number = phone_number
+        returning_caller_instructions = ""
+        if previous_customer:
+            name = previous_customer.get("name")
+            previous_request = previous_customer.get("previous_request")
+            returning_caller_instructions = f"""
+This phone number has a previous customer record.
+Ask if you are speaking with {name}.
+Only after the caller confirms their identity, mention the previous request: {previous_request}.
+Ask if this call is about that request or a new request.
+""".strip()
+
         super().__init__(
-            instructions="""
+            instructions=f"""
 You are the front-office agent for Summit Air an HVAC company.
+{returning_caller_instructions}
 Ask what heating or cooling problem the caller has.
 Ask if the property is residential or commercial.
 Collect the caller's name, callback number, service address, and availability.
@@ -47,6 +65,7 @@ Do not set service priority from weather data.
 If the caller reports an emergency guide tell them to contact authorities like 911. Do not give repair instructions.
 Before the call ends, repeat the problem, property type, name, callback number,
 address, and availability. Ask the caller to confirm that all details are correct.
+After the caller confirms the final details, call remember_customer_record with the confirmed name and a short summary of the current request.
 Do not promise an appointment. Say that staff will review the request and follow up.
 Keep each response short and conversational.
 """.strip()
@@ -68,12 +87,23 @@ Keep each response short and conversational.
     ) -> dict[str, object]:
         return await get_current_weather(latitude, longitude)
 
+    @function_tool(
+        description="Save the confirmed caller name and current service request."
+    )
+    async def remember_customer_record(
+        self, context: RunContext, name: str, request_summary: str
+    ) -> dict[str, object]:
+        return await remember_customer(self.phone_number, name, request_summary)
+
 
 server = AgentServer()
 
 
 @server.rtc_session(agent_name="hvac-front-desk")
 async def hvac_front_desk(ctx: agents.JobContext) -> None:
+    participant = await ctx.wait_for_participant()
+    phone_number = participant.attributes.get("sip.phoneNumber")
+    previous_customer = await lookup_customer(phone_number)
     session = AgentSession(
         stt=inference.STT(model="deepgram/nova-3", language="en"),
         llm=inference.LLM(model="google/gemma-4-31b-it"),
@@ -82,9 +112,15 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
             turn_detection=inference.TurnDetector(),
         ),
     )
-    await session.start(room=ctx.room, agent=HVACFrontDeskAgent())
+    await session.start(
+        room=ctx.room,
+        agent=HVACFrontDeskAgent(
+            phone_number=phone_number,
+            previous_customer=previous_customer,
+        ),
+    )
     await session.generate_reply(
-        instructions="Say that you are the representive from Summit Air and ask how you can help them"
+        instructions="Introduce yourself as a Summit Air representative. Use the returning-caller instructions when available. Otherwise, ask how you can help."
     )
 
 

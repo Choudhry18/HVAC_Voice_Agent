@@ -1,0 +1,13 @@
+{
+  "name": "hvac-caller-memory",
+  "account_id": "8828aebbbdcd33d652cf959da20d645b",
+  "main": "src/entry.py",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["python_workers"],
+  "kv_namespaces": [
+    {
+      "binding": "CALLERS",
+      "id": "be990dde2c7a43cba805cf2a97d56fe7"
+    }
+  ]
+}
