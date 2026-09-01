@@ -5,6 +5,7 @@ description = "A basic LiveKit HVAC voice agent"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
+    "httpx>=0.28,<1",
     "livekit-agents>=1.6,<2",
     "python-dotenv>=1.1,<2",
 ]
