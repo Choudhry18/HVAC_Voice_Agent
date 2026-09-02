@@ -53,6 +53,23 @@ MAINTENANCE_FOLLOWUP_DAYS = 60
 CONSOLE_TEST_PHONE = "+12105550199"
 
 
+def customer_memory_phone_numbers(
+    sip_phone_number: str | None,
+    callback_phone_number: str | None,
+) -> list[str]:
+    """Return each distinct phone number that must identify the customer."""
+    phone_numbers: dict[str, str] = {}
+    for phone_number in (sip_phone_number, callback_phone_number):
+        value = str(phone_number or "").strip()
+        digits = "".join(character for character in value if character.isdigit())
+        if not digits:
+            continue
+        if len(digits) == 10:
+            digits = f"1{digits}"
+        phone_numbers.setdefault(digits, value)
+    return list(phone_numbers.values())
+
+
 def describe_record_age(updated_at: object) -> tuple[str, bool]:
     """Return a spoken-friendly age for a stored record and whether it is old
     enough to ask about scheduled maintenance."""
@@ -90,6 +107,7 @@ class HVACFrontDeskAgent(Agent):
         self._weather_task: asyncio.Task | None = None
         self._verified_location: dict[str, object] | None = None
         self._booking: dict[str, object] | None = None
+        self._callback_phone_number: str | None = None
         returning_caller_instructions = ""
         if previous_customer:
             name = previous_customer.get("name")
@@ -227,6 +245,7 @@ class HVACFrontDeskAgent(Agent):
         start: str,
         end: str,
         customer_name: str,
+        callback_number: str,
         summary: str,
         is_emergency: bool,
         after_hours: bool,
@@ -246,18 +265,26 @@ class HVACFrontDeskAgent(Agent):
             or self._verified_location.get("original_address")
             or ""
         )
+        confirmed_callback_number = callback_number.strip()
         result = await request_appointment_booking(
             tech_id=tech_id,
             start=start,
             end=end,
             customer_name=customer_name,
-            customer_phone=self.phone_number or CONSOLE_TEST_PHONE,
+            customer_phone=(
+                confirmed_callback_number
+                or self.phone_number
+                or CONSOLE_TEST_PHONE
+            ),
             address=address,
             summary=summary,
             is_emergency=is_emergency,
             after_hours=after_hours,
         )
         if result.get("booked"):
+            self._callback_phone_number = str(
+                result.get("customer_phone") or confirmed_callback_number
+            ).strip() or None
             self._booking = result
             result = {
                 **{key: value for key, value in result.items() if key != "tech_name"},
@@ -367,11 +394,20 @@ class HVACFrontDeskAgent(Agent):
             )
         if not request_summary:
             return
-        await remember_customer(
+        phone_numbers = customer_memory_phone_numbers(
             self.phone_number,
-            str(booking.get("customer_name", "")),
-            request_summary,
-            str(booking.get("address", "")),
+            self._callback_phone_number,
+        )
+        await asyncio.gather(
+            *(
+                remember_customer(
+                    phone_number,
+                    str(booking.get("customer_name", "")),
+                    request_summary,
+                    str(booking.get("address", "")),
+                )
+                for phone_number in phone_numbers
+            )
         )
 
     def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):

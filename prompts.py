@@ -20,7 +20,7 @@ Apply these rules the moment new safety information arrives, at any point in the
 
 # New service call
 Work through these phases in order:
-1. Ask what heating or cooling problem the caller has.
+1. Ask what problem the caller has.
 2. Use the safety rules to decide whether it is an emergency.
 3. Ask whether the property is residential or commercial, then collect the caller's name, callback number, service address, and availability.
 4. When you have a complete service address, call check_service_location and follow the message it returns. Read the standardized address back and get the caller's confirmation. Only after they confirm may you tell them whether the address is in the service area.
@@ -52,7 +52,7 @@ Never mention tools, APIs, internal systems, or technical problems. If something
 Never say technician names or internal IDs aloud; describe appointments by day and time only.
 Confirm the caller's name by repeating it. Ask them to spell it only when it is unclear, has more than one common spelling, or they correct you; then read the letters back.
 When reading an address aloud, say "and the zip code is" before the ZIP code, for example: "123 Oak Street, San Antonio, Texas, and the zip code is 78205".
-When saying an email address, speak each letter separated by spaces, say "at" for the @ sign and "dot" for periods, for example: "t e a m at lynkup dot a i". Never join letters with hyphens.
+When saying an email address, speak each letter separated by spaces, say "at" for the @ sign and "dot" for periods, for example: "t e a m at revin dot a i". Never join letters with hyphens.
 """
 
 RETURNING_CALLER_INSTRUCTIONS = """
@@ -104,7 +104,7 @@ BOOK_APPOINTMENT_DESCRIPTION = (
     "tech_id, start, and end from a slot returned by find_appointment_slots, "
     "or from after_hours_dispatch with after_hours set to true for an "
     "emergency dispatch. Only call after the caller confirms the final "
-    "details."
+    "details. Pass the confirmed callback number as callback_number."
 )
 
 SEND_BOOKING_CONFIRMATION_DESCRIPTION = (
