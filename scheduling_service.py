@@ -25,6 +25,19 @@ SERVICE_UNAVAILABLE_RESULT = {
 }
 
 
+def severe_temperature_kind(weather: dict[str, object] | None) -> str | None:
+    """Return "heat" or "cold" when the measured temperature alone is severe."""
+    if not weather or weather.get("status") != "OK":
+        return None
+    temperature = weather.get("temperature_fahrenheit")
+    if isinstance(temperature, (int, float)):
+        if temperature >= SEVERE_HEAT_FAHRENHEIT:
+            return "heat"
+        if temperature <= SEVERE_COLD_FAHRENHEIT:
+            return "cold"
+    return None
+
+
 def is_severe_weather(weather: dict[str, object] | None) -> bool:
     if not weather or weather.get("status") != "OK":
         return False
