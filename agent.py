@@ -16,7 +16,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.tools import EndCallTool
 
-from customer_memory_service import lookup_customer, remember_customer
+from customer_memory_service import lookup_customer, record_note, remember_customer
 from location_service import check_service_location as resolve_service_location
 from notification_service import send_email_confirmation
 from prompts import (
@@ -29,15 +29,20 @@ from prompts import (
     END_CALL_GOODBYE_INSTRUCTIONS,
     FIND_APPOINTMENT_SLOTS_DESCRIPTION,
     GREETING_INSTRUCTIONS,
+    LOOKUP_BOOKING_DESCRIPTION,
     MAINTENANCE_FOLLOWUP_INSTRUCTIONS,
+    RECORD_CONCERN_NOTE_DESCRIPTION,
     REMEMBER_CUSTOMER_RECORD_DESCRIPTION,
     RETURNING_CALLER_INSTRUCTIONS,
     SEND_BOOKING_CONFIRMATION_DESCRIPTION,
+    UPDATE_BOOKING_DESCRIPTION,
 )
 from scheduling_service import (
     book_appointment as request_appointment_booking,
     find_available_slots,
     is_severe_weather,
+    lookup_booking as request_booking_lookup,
+    update_booking as request_booking_update,
 )
 from weather_service import get_current_weather
 
@@ -191,6 +196,64 @@ class HVACFrontDeskAgent(Agent):
                     "Read back the appointment day and arrival time window. "
                     "Near the end of the call, offer an email confirmation."
                 ),
+            }
+        return result
+
+    @function_tool(description=RECORD_CONCERN_NOTE_DESCRIPTION)
+    async def record_concern_note(
+        self,
+        context: RunContext,
+        note: str,
+        name: str = "",
+        contact: str = "",
+    ) -> dict[str, object]:
+        return await record_note(note=note, name=name, contact=contact)
+
+    @function_tool(description=LOOKUP_BOOKING_DESCRIPTION)
+    async def lookup_booking(
+        self, context: RunContext, booking_id: str
+    ) -> dict[str, object]:
+        result = await request_booking_lookup(booking_id)
+        if result.get("found"):
+            self._booking = dict(result)
+            result = {
+                **{key: value for key, value in result.items() if key != "tech_name"},
+                "message": (
+                    "Confirm the appointment day and time with the caller. "
+                    "Ask what they would like to change."
+                ),
+            }
+        return result
+
+    @function_tool(description=UPDATE_BOOKING_DESCRIPTION)
+    async def update_booking(
+        self,
+        context: RunContext,
+        booking_id: str,
+        action: str,
+        tech_id: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict[str, object]:
+        result = await request_booking_update(
+            booking_id=booking_id,
+            action=action,
+            tech_id=tech_id,
+            start=start,
+            end=end,
+        )
+        if result.get("updated"):
+            self._booking = dict(result)
+            if result.get("status") == "CANCELLED":
+                message = "Confirm the appointment is cancelled."
+            else:
+                message = (
+                    "Read back the new appointment day and arrival time window. "
+                    "Offer an email confirmation of the change."
+                )
+            result = {
+                **{key: value for key, value in result.items() if key != "tech_name"},
+                "message": message,
             }
         return result
 

@@ -9,7 +9,13 @@ from urllib.parse import urlparse
 from workers import Response, WorkerEntrypoint
 
 from callers import handle_lookup, handle_remember
-from scheduling import handle_availability, handle_book
+from scheduling import (
+    handle_availability,
+    handle_book,
+    handle_booking_lookup,
+    handle_booking_update,
+)
+from notes import handle_note
 from seed import handle_seed
 
 
@@ -41,6 +47,12 @@ class Default(WorkerEntrypoint):
             return await handle_availability(self.env, body)
         if path == "/book":
             return await handle_book(self.env, body)
+        if path == "/booking-lookup":
+            return await handle_booking_lookup(self.env, body)
+        if path == "/booking-update":
+            return await handle_booking_update(self.env, body)
+        if path == "/note":
+            return await handle_note(self.env, body)
         if path == "/seed":
             return await handle_seed(self.env)
 

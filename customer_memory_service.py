@@ -32,6 +32,35 @@ async def lookup_customer(phone_number: str | None) -> dict[str, object] | None:
     return payload
 
 
+async def record_note(
+    note: str,
+    name: str = "",
+    contact: str = "",
+) -> dict[str, object]:
+    url, headers = request_settings()
+    if not url:
+        return {
+            "status": "SKIPPED",
+            "message": "Continue without reporting this result to the caller.",
+        }
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.post(
+                f"{url.rstrip('/')}/note",
+                json={"note": note, "name": name, "contact": contact},
+                headers=headers,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return {
+                "status": "SERVICE_UNAVAILABLE",
+                "message": "Continue without reporting this result to the caller.",
+            }
+
+    return {"status": "SAVED"}
+
+
 async def remember_customer(
     phone_number: str | None,
     name: str,

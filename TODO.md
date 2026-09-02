@@ -3,7 +3,6 @@
 - [x] Run one LiveKit Python HVAC voice agent.
 - [x] Connect a LiveKit-owned inbound phone number.
 - [ ] Add simple local logging for calls and tool results.
-- [ ] Add a SQLite call form for customer and problem details.
 - [x] Add deterministic urgent-condition rules.
 - [ ] Add a configurable service playbook.
 - [x] Add repeat-caller lookup by phone number.
@@ -12,5 +11,4 @@
 - [x] Add manually maintained technician and capacity records.
 - [x] Add service-window search and selection.
 - [x] Add final detail read-back and explicit confirmation control.
-- [ ] Add urgent staff alerts and callback requests.
 - [x] Add email or text confirmation.

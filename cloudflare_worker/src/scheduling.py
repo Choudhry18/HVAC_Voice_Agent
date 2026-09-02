@@ -19,6 +19,13 @@ from timeslots import (
 )
 
 
+def normalize_booking_id(raw: object) -> str:
+    cleaned = "".join(ch for ch in str(raw).lower() if ch.isalnum())
+    if cleaned.startswith("bk"):
+        cleaned = cleaned[2:]
+    return f"bk-{cleaned}" if cleaned else ""
+
+
 async def load_technicians(env) -> list[dict]:
     stored = await env.CALLERS.get("techs:index")
     return json.loads(stored) if stored else []
@@ -185,3 +192,91 @@ async def handle_book(env, body: dict):
     }
     await env.CALLERS.put(f"booking:{booking_id}", json.dumps(booking))
     return Response.json({"booked": True, **booking})
+
+
+async def handle_booking_lookup(env, body: dict):
+    booking_id = normalize_booking_id(body.get("booking_id", ""))
+    if not booking_id:
+        return Response.json({"error": "BOOKING_ID_REQUIRED"}, status=400)
+    stored = await env.CALLERS.get(f"booking:{booking_id}")
+    if not stored:
+        return Response.json({"error": "BOOKING_NOT_FOUND"}, status=404)
+    return Response.json({"found": True, **json.loads(stored)})
+
+
+async def remove_job(env, tech_id: str, job_id: str) -> None:
+    jobs = await load_jobs(env, tech_id)
+    remaining = [job for job in jobs if job.get("job_id") != job_id]
+    await env.CALLERS.put(f"jobs:{tech_id}", json.dumps(remaining))
+
+
+async def handle_booking_update(env, body: dict):
+    booking_id = normalize_booking_id(body.get("booking_id", ""))
+    action = str(body.get("action", "")).strip().lower()
+    if not booking_id:
+        return Response.json({"error": "BOOKING_ID_REQUIRED"}, status=400)
+    stored = await env.CALLERS.get(f"booking:{booking_id}")
+    if not stored:
+        return Response.json({"error": "BOOKING_NOT_FOUND"}, status=404)
+    booking = json.loads(stored)
+
+    if action == "cancel":
+        await remove_job(env, booking["tech_id"], booking_id)
+        booking["status"] = "CANCELLED"
+        booking["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await env.CALLERS.put(f"booking:{booking_id}", json.dumps(booking))
+        return Response.json({"updated": True, **booking})
+
+    if action == "reschedule":
+        tech_id = str(body.get("tech_id", "")).strip()
+        start = parse_time(str(body.get("start", "")).strip())
+        end = parse_time(str(body.get("end", "")).strip())
+        if not tech_id or not start or not end or end <= start:
+            return Response.json({"error": "MISSING_FIELDS"}, status=400)
+
+        technicians = await load_technicians(env)
+        tech = next(
+            (record for record in technicians if record.get("tech_id") == tech_id),
+            None,
+        )
+        if not tech:
+            return Response.json({"error": "UNKNOWN_TECHNICIAN"}, status=404)
+
+        jobs = await load_jobs(env, tech_id)
+        other_jobs = [job for job in jobs if job.get("job_id") != booking_id]
+        if overlaps(start, end, other_jobs):
+            return Response.json({"error": "SLOT_TAKEN"}, status=409)
+
+        await remove_job(env, booking["tech_id"], booking_id)
+        now_utc = datetime.now(timezone.utc).isoformat()
+        job = {
+            "job_id": booking_id,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "summary": booking.get("summary", ""),
+            "customer_phone": booking.get("customer_phone", ""),
+            "is_emergency": booking.get("is_emergency", False),
+            "after_hours": False,
+            "booked_at": now_utc,
+        }
+        new_jobs = await load_jobs(env, tech_id)
+        new_jobs.append(job)
+        await env.CALLERS.put(f"jobs:{tech_id}", json.dumps(new_jobs))
+
+        booking.update(
+            {
+                "tech_id": tech_id,
+                "tech_name": tech["name"],
+                "location": tech["location"],
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "spoken_time": spoken_slot(start, end),
+                "after_hours_surcharge": False,
+                "status": "CONFIRMED",
+                "updated_at": now_utc,
+            }
+        )
+        await env.CALLERS.put(f"booking:{booking_id}", json.dumps(booking))
+        return Response.json({"updated": True, **booking})
+
+    return Response.json({"error": "UNKNOWN_ACTION"}, status=400)

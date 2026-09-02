@@ -69,6 +69,79 @@ async def find_available_slots(
             return SERVICE_UNAVAILABLE_RESULT
 
 
+async def lookup_booking(booking_id: str) -> dict[str, object]:
+    url, headers = request_settings()
+    if not url:
+        return SERVICE_UNAVAILABLE_RESULT
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.post(
+                f"{url.rstrip('/')}/booking-lookup",
+                json={"booking_id": booking_id},
+                headers=headers,
+            )
+            if response.status_code == 404:
+                return {
+                    "status": "BOOKING_NOT_FOUND",
+                    "message": (
+                        "Tell the caller you could not find a booking with that "
+                        "ID and ask them to repeat it, or say a representative "
+                        "will follow up."
+                    ),
+                }
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError):
+            return SERVICE_UNAVAILABLE_RESULT
+
+
+async def update_booking(
+    booking_id: str,
+    action: str,
+    tech_id: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, object]:
+    url, headers = request_settings()
+    if not url:
+        return SERVICE_UNAVAILABLE_RESULT
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.post(
+                f"{url.rstrip('/')}/booking-update",
+                json={
+                    "booking_id": booking_id,
+                    "action": action,
+                    "tech_id": tech_id,
+                    "start": start,
+                    "end": end,
+                },
+                headers=headers,
+            )
+            if response.status_code == 404:
+                return {
+                    "status": "BOOKING_NOT_FOUND",
+                    "message": (
+                        "Tell the caller you could not find that booking and "
+                        "ask them to repeat the booking ID."
+                    ),
+                }
+            if response.status_code == 409:
+                return {
+                    "status": "SLOT_TAKEN",
+                    "message": (
+                        "That time was just taken. Apologize and call "
+                        "find_appointment_slots again to offer other times."
+                    ),
+                }
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError):
+            return SERVICE_UNAVAILABLE_RESULT
+
+
 async def book_appointment(
     tech_id: str,
     start: str,
