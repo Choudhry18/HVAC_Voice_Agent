@@ -61,7 +61,12 @@ def overlaps(start: datetime, end: datetime, jobs: list[dict]) -> bool:
     return False
 
 
-def open_slots_for_tech(tech: dict, jobs: list[dict], now: datetime) -> list[dict]:
+def open_slots_for_tech(
+    tech: dict,
+    jobs: list[dict],
+    now: datetime,
+    duration_hours: int = SLOT_HOURS,
+) -> list[dict]:
     slots = []
     for day_offset in range(SEARCH_HORIZON_DAYS + 1):
         slot_date = (now + timedelta(days=day_offset)).date()
@@ -70,8 +75,17 @@ def open_slots_for_tech(tech: dict, jobs: list[dict], now: datetime) -> list[dic
                 slot_date.year, slot_date.month, slot_date.day,
                 start_hour, tzinfo=BUSINESS_TIMEZONE,
             )
-            end = start + timedelta(hours=SLOT_HOURS)
+            end = start + timedelta(hours=duration_hours)
+            close = datetime(
+                slot_date.year,
+                slot_date.month,
+                slot_date.day,
+                BUSINESS_CLOSE_HOUR,
+                tzinfo=BUSINESS_TIMEZONE,
+            )
             if start <= now:
+                continue
+            if end > close:
                 continue
             if overlaps(start, end, jobs):
                 continue
@@ -84,6 +98,7 @@ def open_slots_for_tech(tech: dict, jobs: list[dict], now: datetime) -> list[dic
                     "end": end.isoformat(),
                     "date": slot_date.isoformat(),
                     "spoken": spoken_slot(start, end),
+                    "duration_hours": duration_hours,
                 }
             )
     return slots

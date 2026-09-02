@@ -38,6 +38,14 @@ async def handle_remember(env, body: dict):
         "name": name,
         "previous_request": previous_request,
         "address": address,
+        "property_type": str(
+            body.get("property_type", "residential")
+        ).strip().lower(),
+        "business_name": str(body.get("business_name", "")).strip(),
+        "service_code": str(body.get("service_code", "")).strip(),
+        "equipment_details": str(body.get("equipment_details", "")).strip(),
+        "operational_impact": str(body.get("operational_impact", "")).strip(),
+        "access_notes": str(body.get("access_notes", "")).strip(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await env.CALLERS.put(f"caller:{phone_number}", json.dumps(record))
