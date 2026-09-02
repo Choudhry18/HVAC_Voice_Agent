@@ -33,7 +33,10 @@ async def lookup_customer(phone_number: str | None) -> dict[str, object] | None:
 
 
 async def remember_customer(
-    phone_number: str | None, name: str, request_summary: str
+    phone_number: str | None,
+    name: str,
+    request_summary: str,
+    address: str = "",
 ) -> dict[str, object]:
     url, headers = request_settings()
     if not url or not phone_number:
@@ -50,6 +53,7 @@ async def remember_customer(
                     "phone_number": phone_number,
                     "name": name,
                     "previous_request": request_summary,
+                    "address": address,
                 },
                 headers=headers,
             )

@@ -49,6 +49,7 @@ class Default(WorkerEntrypoint):
         if path == "/remember":
             name = str(body.get("name", "")).strip()
             previous_request = str(body.get("previous_request", "")).strip()
+            address = str(body.get("address", "")).strip()
             if not name or not previous_request:
                 return Response.json(
                     {"error": "NAME_AND_REQUEST_REQUIRED"}, status=400
@@ -58,6 +59,7 @@ class Default(WorkerEntrypoint):
                 "phone_number": phone_number,
                 "name": name,
                 "previous_request": previous_request,
+                "address": address,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             await self.env.CALLERS.put(key, json.dumps(record))
