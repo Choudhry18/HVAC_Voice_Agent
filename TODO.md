@@ -7,7 +7,7 @@
 - [ ] Add a SQLite call form for customer and problem details.
 - [ ] Add deterministic urgent-condition rules.
 - [ ] Add a configurable service playbook.
-- [ ] Add repeat-caller lookup by phone number.
+- [x] Add repeat-caller lookup by phone number.
 - [x] Add a location and service-area check.
 - [x] Add a current-weather check.
 - [ ] Add manually maintained technician and capacity records.

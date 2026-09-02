@@ -1,0 +1,11 @@
+[project]
+name = "hvac-caller-memory-worker"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]

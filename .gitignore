@@ -1,5 +1,10 @@
 .env
 .env.local
 .venv/
+.venv-workers/
 __pycache__/
 *.pyc
+.dev.vars
+.wrangler/
+node_modules/
+python_modules/
