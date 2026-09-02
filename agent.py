@@ -18,11 +18,34 @@ from livekit.agents.beta.tools import EndCallTool
 
 from customer_memory_service import lookup_customer, remember_customer
 from location_service import check_service_location as resolve_service_location
+from notification_service import send_email_confirmation
+from prompts import (
+    ADDRESS_ON_FILE_INSTRUCTIONS,
+    BASE_INSTRUCTIONS,
+    BOOK_APPOINTMENT_DESCRIPTION,
+    CHECK_CURRENT_WEATHER_DESCRIPTION,
+    CHECK_SERVICE_LOCATION_DESCRIPTION,
+    END_CALL_EXTRA_DESCRIPTION,
+    END_CALL_GOODBYE_INSTRUCTIONS,
+    FIND_APPOINTMENT_SLOTS_DESCRIPTION,
+    GREETING_INSTRUCTIONS,
+    MAINTENANCE_FOLLOWUP_INSTRUCTIONS,
+    REMEMBER_CUSTOMER_RECORD_DESCRIPTION,
+    RETURNING_CALLER_INSTRUCTIONS,
+    SEND_BOOKING_CONFIRMATION_DESCRIPTION,
+)
+from scheduling_service import (
+    book_appointment as request_appointment_booking,
+    find_available_slots,
+    is_severe_weather,
+)
 from weather_service import get_current_weather
 
 load_dotenv()
 
 MAINTENANCE_FOLLOWUP_DAYS = 60
+# Console runs have no SIP participant, so fall back to a test number there.
+CONSOLE_TEST_PHONE = "+12105550199"
 
 
 def describe_record_age(updated_at: object) -> tuple[str, bool]:
@@ -59,6 +82,8 @@ class HVACFrontDeskAgent(Agent):
         previous_customer: dict[str, object] | None = None,
     ) -> None:
         self.phone_number = phone_number
+        self._last_weather: dict[str, object] | None = None
+        self._booking: dict[str, object] | None = None
         returning_caller_instructions = ""
         if previous_customer:
             name = previous_customer.get("name")
@@ -67,100 +92,138 @@ class HVACFrontDeskAgent(Agent):
             record_age, ask_maintenance = describe_record_age(
                 previous_customer.get("updated_at")
             )
-            returning_caller_instructions = f"""
-This phone number matches a previous customer record. Use it naturally in conversation. Never recite the stored record back to the caller, and never read more than one stored detail in a single response.
-Ask if you are speaking with {name}.
-Only after the caller confirms their identity, mention that we have a request on file from {record_age} and ask if this call is about that same request.
-For your reference only, the request on file is: {previous_request}. Do not read it out unless the caller asks what the request was or cannot remember it.
-If this call is about the request on file, ask if the caller wants to add an update. Fold any update into the request summary you save at the end of the call.
-If this call is about the request on file, you already have the caller's name; do not ask for it again.
-""".strip()
+            returning_caller_instructions = RETURNING_CALLER_INSTRUCTIONS.format(
+                name=name,
+                record_age=record_age,
+                previous_request=previous_request,
+            )
             if ask_maintenance:
-                returning_caller_instructions += """
-Because the request on file is not recent, also ask whether this call is a scheduled maintenance visit for the same equipment."""
+                returning_caller_instructions += "\n" + MAINTENANCE_FOLLOWUP_INSTRUCTIONS
             if address_on_file:
-                returning_caller_instructions += f"""
-There is a service address on file: {address_on_file}.
-When you need the service address, ask if the service is at the same address as last time instead of asking the caller to say it. Do not read the address on file aloud unless the caller asks or seems unsure.
-If the caller confirms it is the same address, call check_service_location with the address on file.
-If the caller says it is a different address, collect the service address as usual."""
+                returning_caller_instructions += "\n" + ADDRESS_ON_FILE_INSTRUCTIONS.format(
+                    address_on_file=address_on_file
+                )
 
         super().__init__(
-            instructions=f"""
-You are the front-office agent for Summit Air an HVAC company.
-{returning_caller_instructions}
-Ask what heating or cooling problem the caller has.
-Ask if the property is residential or commercial.
-Collect the caller's name, callback number, service address, and availability.
-Ask for these details one at a time. Never ask for more than one detail in a single response.
-Wait for the caller's answer before asking for the next detail.
-If the caller volunteers details before being asked, accept them, do not ask for them again, and move on to the next missing detail.
-Repeat the caller's name normally to confirm it.
-If the name is unclear, has more than one common spelling, or the caller corrects it, ask the caller to spell the name.
-Read the letters back and ask if the spelling is correct.
-Do not ask every caller to spell a name that is already clear and confirmed.
-When the caller gives a complete service address, call check_service_location.
-Follow the status returned by check_service_location.
-If the status is FIX, ask for the missing or suspicious address information.
-If the status is CONFIRM, read the standardized address and ask if it is correct.
-If the status is CONFIRM_ADD_SUBPREMISES, ask for an apartment or suite number.
-If the status is ACCEPT, read the standardized address and ask if it is correct.
-Whenever you read an address aloud, introduce the ZIP code with the words "and the zip code is" before saying it, for example: "123 Oak Street, San Antonio, Texas, and the zip code is 78205".
-For all current and future tool calls, never mention tools, APIs, internal systems, or technical problems to the caller.
-If a tool fails, do not report the failure to the caller.
-Retry the location check one time if a retry can help.
-If the location check fails again, keep the address exactly as the caller gave it and continue.
-Do not claim that an address is serviceable when the location check does not return a service-area result.
-Do not tell the caller the service-area result until they confirm the standardized address.
-After the caller confirms a validated address, call check_current_weather with the exact coordinates returned by check_service_location.
-Do not estimate coordinates.
-Do not describe the weather unless the caller asks.
-Do not set service priority from weather data.
-If the caller reports an emergency guide tell them to contact authorities like 911. Do not give repair instructions.
-Before the call ends, repeat the problem, property type, name, callback number,
-address, and availability. Ask the caller to confirm that all details are correct.
-After the caller confirms the final details, call remember_customer_record with the confirmed name, the confirmed service address, and a short summary of the current request. Do not include the address in the request summary.
-After remember_customer_record finishes, call end_call. Do not say a separate goodbye before calling end_call.
-If the caller wants to hang up before you have collected and confirmed all the required details, say: "I haven't received all the necessary information yet. Do you still want to hang up?"
-Only call end_call early like this after the caller explicitly says yes to that question.
-If the caller says no, continue collecting the remaining details.
-Do not promise an appointment. Say that staff will review the request and follow up.
-Keep each response short and conversational.
-""".strip(),
+            instructions=BASE_INSTRUCTIONS.format(
+                returning_caller_instructions=returning_caller_instructions
+            ).strip(),
             tools=[
                 EndCallTool(
-                    extra_description=(
-                        "If the required details have not all been collected and confirmed, "
-                        "do not call this tool until you have warned the caller that you have "
-                        "not received all the necessary information and they have explicitly "
-                        "confirmed they still want to hang up."
-                    ),
+                    extra_description=END_CALL_EXTRA_DESCRIPTION,
                     delete_room=True,
-                    end_instructions="Thank the caller, say that staff will follow up, and say goodbye.",
+                    end_instructions=END_CALL_GOODBYE_INSTRUCTIONS,
                     ignore_on_enter=True,
                 )
             ],
         )
 
-    @function_tool(
-        description="Check a service address against the San Antonio service locations."
-    )
+    @function_tool(description=CHECK_SERVICE_LOCATION_DESCRIPTION)
     async def check_service_location(
         self, context: RunContext, address: str
     ) -> dict[str, object]:
         return await resolve_service_location(address)
 
-    @function_tool(
-        description="Get current weather for validated latitude and longitude coordinates."
-    )
+    @function_tool(description=CHECK_CURRENT_WEATHER_DESCRIPTION)
     async def check_current_weather(
         self, context: RunContext, latitude: float, longitude: float
     ) -> dict[str, object]:
-        return await get_current_weather(latitude, longitude)
+        weather = await get_current_weather(latitude, longitude)
+        self._last_weather = weather
+        return weather
 
-    @function_tool(
-        description="Save the confirmed caller name, confirmed service address, and current service request."
-    )
+    @function_tool(description=FIND_APPOINTMENT_SLOTS_DESCRIPTION)
+    async def find_appointment_slots(
+        self,
+        context: RunContext,
+        location: str,
+        is_emergency: bool,
+        preferred_date: str | None = None,
+        time_preference: str | None = None,
+    ) -> dict[str, object]:
+        result = await find_available_slots(
+            location=location,
+            is_emergency=is_emergency,
+            severe_weather=is_severe_weather(self._last_weather),
+            preferred_date=preferred_date,
+            time_preference=time_preference,
+        )
+        # Keep technician names out of the conversation; the caller only needs times.
+        slots = result.get("slots")
+        if isinstance(slots, list):
+            for slot in slots:
+                if isinstance(slot, dict):
+                    slot.pop("tech_name", None)
+        dispatch = result.get("after_hours_dispatch")
+        if isinstance(dispatch, dict):
+            dispatch.pop("tech_name", None)
+        return result
+
+    @function_tool(description=BOOK_APPOINTMENT_DESCRIPTION)
+    async def book_appointment(
+        self,
+        context: RunContext,
+        tech_id: str,
+        start: str,
+        end: str,
+        customer_name: str,
+        summary: str,
+        address: str,
+        is_emergency: bool,
+        after_hours: bool,
+    ) -> dict[str, object]:
+        result = await request_appointment_booking(
+            tech_id=tech_id,
+            start=start,
+            end=end,
+            customer_name=customer_name,
+            customer_phone=self.phone_number or CONSOLE_TEST_PHONE,
+            address=address,
+            summary=summary,
+            is_emergency=is_emergency,
+            after_hours=after_hours,
+        )
+        if result.get("booked"):
+            self._booking = result
+            result = {
+                **{key: value for key, value in result.items() if key != "tech_name"},
+                "message": (
+                    "Read back the appointment day and arrival time window. "
+                    "Near the end of the call, offer an email confirmation."
+                ),
+            }
+        return result
+
+    @function_tool(description=SEND_BOOKING_CONFIRMATION_DESCRIPTION)
+    async def send_booking_confirmation(
+        self, context: RunContext, email: str
+    ) -> dict[str, object]:
+        if not self._booking:
+            return {
+                "status": "NO_BOOKING",
+                "message": "Book an appointment before sending a confirmation.",
+            }
+        if not email or "@" not in email:
+            return {
+                "status": "EMAIL_REQUIRED",
+                "message": (
+                    "Ask the caller to spell their email address, read it back, "
+                    "and confirm it before retrying."
+                ),
+            }
+        result = await send_email_confirmation(email, self._booking)
+        if result.get("status") == "SENT":
+            result = {
+                **result,
+                "message": (
+                    "Ask the caller to check their inbox now and confirm the "
+                    "email arrived before ending the call. Offer one resend "
+                    "if it did not arrive."
+                ),
+            }
+        return result
+
+    @function_tool(description=REMEMBER_CUSTOMER_RECORD_DESCRIPTION)
     async def remember_customer_record(
         self, context: RunContext, name: str, request_summary: str, address: str
     ) -> dict[str, object]:
@@ -201,9 +264,7 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
             previous_customer=previous_customer,
         ),
     )
-    await session.generate_reply(
-        instructions="Introduce yourself as a Summit Air representative. Use the returning-caller instructions when available. Otherwise, ask how you can help."
-    )
+    await session.generate_reply(instructions=GREETING_INSTRUCTIONS)
 
 
 if __name__ == "__main__":
