@@ -1,3 +1,4 @@
+import asyncio
 import re
 from collections.abc import AsyncIterable
 from datetime import datetime, timezone
@@ -23,7 +24,6 @@ from prompts import (
     ADDRESS_ON_FILE_INSTRUCTIONS,
     BASE_INSTRUCTIONS,
     BOOK_APPOINTMENT_DESCRIPTION,
-    CHECK_CURRENT_WEATHER_DESCRIPTION,
     CHECK_SERVICE_LOCATION_DESCRIPTION,
     END_CALL_EXTRA_DESCRIPTION,
     END_CALL_GOODBYE_INSTRUCTIONS,
@@ -32,7 +32,6 @@ from prompts import (
     LOOKUP_BOOKING_DESCRIPTION,
     MAINTENANCE_FOLLOWUP_INSTRUCTIONS,
     RECORD_CONCERN_NOTE_DESCRIPTION,
-    REMEMBER_CUSTOMER_RECORD_DESCRIPTION,
     RETURNING_CALLER_INSTRUCTIONS,
     SEND_BOOKING_CONFIRMATION_DESCRIPTION,
     UPDATE_BOOKING_DESCRIPTION,
@@ -42,6 +41,7 @@ from scheduling_service import (
     find_available_slots,
     is_severe_weather,
     lookup_booking as request_booking_lookup,
+    severe_temperature_kind,
     update_booking as request_booking_update,
 )
 from weather_service import get_current_weather
@@ -87,7 +87,8 @@ class HVACFrontDeskAgent(Agent):
         previous_customer: dict[str, object] | None = None,
     ) -> None:
         self.phone_number = phone_number
-        self._last_weather: dict[str, object] | None = None
+        self._weather_task: asyncio.Task | None = None
+        self._verified_location: dict[str, object] | None = None
         self._booking: dict[str, object] | None = None
         returning_caller_instructions = ""
         if previous_customer:
@@ -127,32 +128,86 @@ class HVACFrontDeskAgent(Agent):
     async def check_service_location(
         self, context: RunContext, address: str
     ) -> dict[str, object]:
-        return await resolve_service_location(address)
+        result = await resolve_service_location(address)
+        # Pin the validated address so scheduling and booking use it directly;
+        # a lookup for a new address replaces any earlier verification.
+        self._verified_location = (
+            result if result.get("serviceability") == "SERVICEABLE" else None
+        )
+        latitude = result.get("latitude")
+        longitude = result.get("longitude")
+        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+            # Fetch weather in the background; find_appointment_slots awaits it.
+            self._weather_task = asyncio.create_task(
+                get_current_weather(float(latitude), float(longitude))
+            )
+        return result
 
-    @function_tool(description=CHECK_CURRENT_WEATHER_DESCRIPTION)
-    async def check_current_weather(
-        self, context: RunContext, latitude: float, longitude: float
-    ) -> dict[str, object]:
-        weather = await get_current_weather(latitude, longitude)
-        self._last_weather = weather
-        return weather
+    async def _current_weather(self) -> dict[str, object] | None:
+        if self._weather_task is None:
+            return None
+        try:
+            return await self._weather_task
+        except Exception:
+            return None
 
     @function_tool(description=FIND_APPOINTMENT_SLOTS_DESCRIPTION)
     async def find_appointment_slots(
         self,
         context: RunContext,
-        location: str,
         is_emergency: bool,
+        issue_type: str,
         preferred_date: str | None = None,
         time_preference: str | None = None,
     ) -> dict[str, object]:
+        location = None
+        if self._verified_location:
+            location = self._verified_location.get("nearest_location")
+        elif self._booking:
+            location = self._booking.get("location")
+        if not location:
+            return {
+                "status": "ADDRESS_NOT_VERIFIED",
+                "message": (
+                    "Verify the service address with check_service_location "
+                    "before offering appointment times."
+                ),
+            }
+        weather = await self._current_weather()
+        severe_weather = is_severe_weather(weather)
+        # An outage that matches the measured severe temperature is an
+        # emergency even if triage missed it: the LLM knows what broke, the
+        # weather data knows how extreme it is outside.
+        temperature_kind = severe_temperature_kind(weather)
+        escalated = not is_emergency and (
+            (temperature_kind == "heat" and issue_type == "cooling_failure")
+            or (temperature_kind == "cold" and issue_type == "heating_failure")
+        )
+        is_emergency = is_emergency or escalated
         result = await find_available_slots(
             location=location,
             is_emergency=is_emergency,
-            severe_weather=is_severe_weather(self._last_weather),
+            severe_weather=severe_weather,
             preferred_date=preferred_date,
             time_preference=time_preference,
         )
+        if result.get("status") == "OK":
+            # Give the LLM a short weather summary only when severe weather is
+            # actually escalating this emergency (same gate as the scheduler),
+            # so it can acknowledge the conditions while offering slots.
+            if is_emergency and severe_weather and weather:
+                result["severe_weather_context"] = {
+                    "temperature_fahrenheit": weather.get("temperature_fahrenheit"),
+                    "feels_like_fahrenheit": weather.get("feels_like_fahrenheit"),
+                    "condition": weather.get("condition"),
+                }
+            if escalated:
+                result["message"] = (
+                    "Current temperatures at the service address make this "
+                    "outage an emergency. Treat the request as an emergency "
+                    "for the rest of the call, including booking, and offer "
+                    "the earliest option first."
+                )
         # Keep technician names out of the conversation; the caller only needs times.
         slots = result.get("slots")
         if isinstance(slots, list):
@@ -173,10 +228,24 @@ class HVACFrontDeskAgent(Agent):
         end: str,
         customer_name: str,
         summary: str,
-        address: str,
         is_emergency: bool,
         after_hours: bool,
     ) -> dict[str, object]:
+        # The service address comes from the pinned validation result, not the
+        # LLM, so a booking can never carry a misheard or unverified address.
+        if not self._verified_location:
+            return {
+                "status": "ADDRESS_NOT_VERIFIED",
+                "message": (
+                    "Verify the service address with check_service_location "
+                    "before booking."
+                ),
+            }
+        address = str(
+            self._verified_location.get("standardized_address")
+            or self._verified_location.get("original_address")
+            or ""
+        )
         result = await request_appointment_booking(
             tech_id=tech_id,
             start=start,
@@ -278,22 +347,32 @@ class HVACFrontDeskAgent(Agent):
         if result.get("status") == "SENT":
             result = {
                 **result,
-                "message": (
-                    "Ask the caller to check their inbox now and confirm the "
-                    "email arrived before ending the call. Offer one resend "
-                    "if it did not arrive."
-                ),
+                "message": "Tell the caller the confirmation email is on its way.",
             }
         return result
 
-    @function_tool(description=REMEMBER_CUSTOMER_RECORD_DESCRIPTION)
-    async def remember_customer_record(
-        self, context: RunContext, name: str, request_summary: str, address: str
-    ) -> dict[str, object]:
-        result = await remember_customer(
-            self.phone_number, name, request_summary, address
+    async def save_customer_memory(self) -> None:
+        """Persist the caller record from the booking at call end, so the LLM
+        never has to remember to do it."""
+        booking = self._booking
+        if not booking or not booking.get("customer_name"):
+            return
+        summary = str(booking.get("summary", "")).strip()
+        if booking.get("status") == "CANCELLED":
+            request_summary = f"{summary} (appointment cancelled)".strip()
+        else:
+            spoken_time = str(booking.get("spoken_time", "")).strip()
+            request_summary = (
+                f"{summary} Booked for {spoken_time}." if spoken_time else summary
+            )
+        if not request_summary:
+            return
+        await remember_customer(
+            self.phone_number,
+            str(booking.get("customer_name", "")),
+            request_summary,
+            str(booking.get("address", "")),
         )
-        return result
 
     def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         # Rewrite "HVAC" so the TTS says it as one word instead of spelling the letters.
@@ -320,13 +399,12 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
             turn_detection=inference.TurnDetector(),
         ),
     )
-    await session.start(
-        room=ctx.room,
-        agent=HVACFrontDeskAgent(
-            phone_number=phone_number,
-            previous_customer=previous_customer,
-        ),
+    agent = HVACFrontDeskAgent(
+        phone_number=phone_number,
+        previous_customer=previous_customer,
     )
+    ctx.add_shutdown_callback(agent.save_customer_memory)
+    await session.start(room=ctx.room, agent=agent)
     await session.generate_reply(instructions=GREETING_INSTRUCTIONS)
 
 
