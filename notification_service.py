@@ -12,6 +12,12 @@ FAILED_MESSAGE = (
 
 def format_confirmation(booking: dict[str, object]) -> tuple[str, str, str]:
     """Return (subject, text body, html body) for a booking confirmation."""
+    is_pending = booking.get("status") == "PENDING_CONFIRMATION"
+    opening = (
+        "Your requested Summit Air appointment window is pending staff confirmation."
+        if is_pending
+        else "Your Summit Air appointment is confirmed."
+    )
     surcharge_line = (
         "Note: this is an after-hours emergency visit, so the cost may be "
         "higher than a regular appointment."
@@ -24,8 +30,12 @@ def format_confirmation(booking: dict[str, object]) -> tuple[str, str, str]:
         ("Address", booking.get("address")),
         ("Service", booking.get("summary")),
     ]
+    if booking.get("business_name"):
+        details.insert(1, ("Business", booking.get("business_name")))
+    if is_pending:
+        details.insert(1, ("Status", "Pending staff confirmation"))
 
-    text_lines = ["Your Summit Air appointment is confirmed.", ""]
+    text_lines = [opening, ""]
     text_lines.extend(f"{label}: {value}" for label, value in details)
     if surcharge_line:
         text_lines.extend(["", surcharge_line])
@@ -44,14 +54,15 @@ def format_confirmation(booking: dict[str, object]) -> tuple[str, str, str]:
     html = (
         "<div style='font-family:Arial,sans-serif;max-width:520px'>"
         "<h2 style='color:#1a5276'>Summit Air</h2>"
-        "<p>Your appointment is confirmed.</p>"
+        f"<p>{opening}</p>"
         f"<table style='border-collapse:collapse'>{detail_rows}</table>"
         f"{surcharge_html}"
         "<p>Call +1 (484) 398-5113 and give your booking ID to make changes.</p>"
         "</div>"
     )
 
-    subject = f"Summit Air appointment confirmation {booking.get('booking_id')}"
+    subject_kind = "request received" if is_pending else "appointment confirmation"
+    subject = f"Summit Air {subject_kind} {booking.get('booking_id')}"
     return subject, "\n".join(text_lines), html
 
 

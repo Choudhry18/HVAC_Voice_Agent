@@ -15,12 +15,61 @@ from timeslots import (
 )
 
 SEED_TECHNICIANS = (
-    {"tech_id": "tech-downtown-1", "name": "Marcus Rivera", "location": "Downtown San Antonio", "on_call": False},
-    {"tech_id": "tech-downtown-2", "name": "Priya Shah", "location": "Downtown San Antonio", "on_call": True},
-    {"tech_id": "tech-stoneoak-1", "name": "Dana Whitfield", "location": "Stone Oak", "on_call": True},
-    {"tech_id": "tech-stoneoak-2", "name": "Tom Ellis", "location": "Stone Oak", "on_call": False},
-    {"tech_id": "tech-alamoranch-1", "name": "Luis Ortega", "location": "Alamo Ranch", "on_call": False},
-    {"tech_id": "tech-alamoranch-2", "name": "Keisha Brown", "location": "Alamo Ranch", "on_call": True},
+    {
+        "tech_id": "tech-downtown-1",
+        "name": "Marcus Rivera",
+        "location": "Downtown San Antonio",
+        "on_call": False,
+        "commercial_skills": [
+            "rtu_packaged",
+            "commercial_split",
+            "commercial_maintenance",
+        ],
+    },
+    {
+        "tech_id": "tech-downtown-2",
+        "name": "Priya Shah",
+        "location": "Downtown San Antonio",
+        "on_call": True,
+        "commercial_skills": ["vrv_vrf", "controls_bms", "commissioning"],
+    },
+    {
+        "tech_id": "tech-stoneoak-1",
+        "name": "Dana Whitfield",
+        "location": "Stone Oak",
+        "on_call": True,
+        "commercial_skills": ["vrv_vrf", "rtu_packaged", "commissioning"],
+    },
+    {
+        "tech_id": "tech-stoneoak-2",
+        "name": "Tom Ellis",
+        "location": "Stone Oak",
+        "on_call": False,
+        "commercial_skills": [
+            "boiler_hydronic",
+            "ventilation_iaq",
+            "commercial_maintenance",
+        ],
+    },
+    {
+        "tech_id": "tech-alamoranch-1",
+        "name": "Luis Ortega",
+        "location": "Alamo Ranch",
+        "on_call": False,
+        "commercial_skills": ["chiller", "controls_bms", "commissioning"],
+    },
+    {
+        "tech_id": "tech-alamoranch-2",
+        "name": "Keisha Brown",
+        "location": "Alamo Ranch",
+        "on_call": True,
+        "commercial_skills": [
+            "vrv_vrf",
+            "rtu_packaged",
+            "commercial_split",
+            "commercial_maintenance",
+        ],
+    },
 )
 
 SEED_JOB_SUMMARIES = (

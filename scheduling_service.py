@@ -56,6 +56,8 @@ async def find_available_slots(
     location: str,
     is_emergency: bool,
     severe_weather: bool,
+    property_type: str = "residential",
+    service_code: str | None = None,
     preferred_date: str | None = None,
     time_preference: str | None = None,
 ) -> dict[str, object]:
@@ -71,11 +73,22 @@ async def find_available_slots(
                     "location": location,
                     "is_emergency": is_emergency,
                     "severe_weather": severe_weather,
+                    "property_type": property_type,
+                    "service_code": service_code,
                     "preferred_date": preferred_date,
                     "time_preference": time_preference,
                 },
                 headers=headers,
             )
+            if response.status_code in {400, 404} and property_type == "commercial":
+                return {
+                    "status": "STAFF_REVIEW",
+                    "message": (
+                        "No qualified commercial time is available. Collect the "
+                        "remaining details, save a commercial request, and tell "
+                        "the caller that staff will follow up."
+                    ),
+                }
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError):
@@ -165,6 +178,16 @@ async def book_appointment(
     summary: str,
     is_emergency: bool,
     after_hours: bool,
+    property_type: str = "residential",
+    service_code: str | None = None,
+    classification_confidence: float | None = None,
+    business_name: str = "",
+    site_contact_name: str = "",
+    site_contact_phone: str = "",
+    issue_description: str = "",
+    equipment_details: str = "",
+    operational_impact: str = "",
+    access_notes: str = "",
 ) -> dict[str, object]:
     url, headers = request_settings()
     if not url:
@@ -184,6 +207,16 @@ async def book_appointment(
                     "summary": summary,
                     "is_emergency": is_emergency,
                     "after_hours": after_hours,
+                    "property_type": property_type,
+                    "service_code": service_code,
+                    "classification_confidence": classification_confidence,
+                    "business_name": business_name,
+                    "site_contact_name": site_contact_name,
+                    "site_contact_phone": site_contact_phone,
+                    "issue_description": issue_description,
+                    "equipment_details": equipment_details,
+                    "operational_impact": operational_impact,
+                    "access_notes": access_notes,
                 },
                 headers=headers,
             )
@@ -195,6 +228,86 @@ async def book_appointment(
                         "find_appointment_slots again to offer other times."
                     ),
                 }
+            if response.status_code == 400 and property_type == "commercial":
+                return {
+                    "status": "STAFF_REVIEW",
+                    "message": (
+                        "Do not book this commercial request. Save it for staff "
+                        "review and tell the caller that staff will follow up."
+                    ),
+                }
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError):
+            return SERVICE_UNAVAILABLE_RESULT
+
+
+async def classify_commercial_service(
+    issue_description: str,
+) -> dict[str, object]:
+    url, headers = request_settings()
+    if not url:
+        return {
+            "status": "STAFF_REVIEW",
+            "service_code": "other_or_unclear",
+            "confidence": 0.0,
+            "message": "Collect the commercial request for staff review.",
+        }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            response = await client.post(
+                f"{url.rstrip('/')}/classify-commercial-service",
+                json={"issue_description": issue_description},
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError):
+            return {
+                "status": "STAFF_REVIEW",
+                "service_code": "other_or_unclear",
+                "confidence": 0.0,
+                "message": "Collect the commercial request for staff review.",
+            }
+
+
+async def save_commercial_request(
+    business_name: str,
+    site_contact_name: str,
+    site_contact_phone: str,
+    address: str,
+    issue_description: str,
+    service_code: str = "other_or_unclear",
+    classification_confidence: float = 0.0,
+    equipment_details: str = "",
+    operational_impact: str = "",
+    access_notes: str = "",
+    preferred_time: str = "",
+) -> dict[str, object]:
+    url, headers = request_settings()
+    if not url:
+        return SERVICE_UNAVAILABLE_RESULT
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            response = await client.post(
+                f"{url.rstrip('/')}/commercial-request",
+                json={
+                    "business_name": business_name,
+                    "site_contact_name": site_contact_name,
+                    "site_contact_phone": site_contact_phone,
+                    "address": address,
+                    "issue_description": issue_description,
+                    "service_code": service_code,
+                    "classification_confidence": classification_confidence,
+                    "equipment_details": equipment_details,
+                    "operational_impact": operational_impact,
+                    "access_notes": access_notes,
+                    "preferred_time": preferred_time,
+                },
+                headers=headers,
+            )
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError, ValueError):

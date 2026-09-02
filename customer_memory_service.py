@@ -66,6 +66,12 @@ async def remember_customer(
     name: str,
     request_summary: str,
     address: str = "",
+    property_type: str = "residential",
+    business_name: str = "",
+    service_code: str = "",
+    equipment_details: str = "",
+    operational_impact: str = "",
+    access_notes: str = "",
 ) -> dict[str, object]:
     url, headers = request_settings()
     if not url or not phone_number:
@@ -83,6 +89,12 @@ async def remember_customer(
                     "name": name,
                     "previous_request": request_summary,
                     "address": address,
+                    "property_type": property_type,
+                    "business_name": business_name,
+                    "service_code": service_code,
+                    "equipment_details": equipment_details,
+                    "operational_impact": operational_impact,
+                    "access_notes": access_notes,
                 },
                 headers=headers,
             )
