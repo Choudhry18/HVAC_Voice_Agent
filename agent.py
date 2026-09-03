@@ -16,17 +16,19 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.beta.tools import EndCallTool
+from livekit.plugins import openai as openai_plugin
 
 from customer_memory_service import lookup_customer, record_note, remember_customer
 from location_service import check_service_location as resolve_service_location
 from notification_service import send_email_confirmation
 from prompts import (
     ADDRESS_ON_FILE_INSTRUCTIONS,
+    CUSTOMER_RECORD_LOADED_INSTRUCTIONS,
+    LOAD_CUSTOMER_RECORD_DESCRIPTION,
     BASE_INSTRUCTIONS,
     BOOK_APPOINTMENT_DESCRIPTION,
     CHECK_SERVICE_LOCATION_DESCRIPTION,
     CLASSIFY_COMMERCIAL_ISSUE_DESCRIPTION,
-    END_CALL_EXTRA_DESCRIPTION,
     END_CALL_GOODBYE_INSTRUCTIONS,
     FIND_APPOINTMENT_SLOTS_DESCRIPTION,
     GREETING_INSTRUCTIONS,
@@ -113,25 +115,14 @@ class HVACFrontDeskAgent(Agent):
         self._booking: dict[str, object] | None = None
         self._callback_phone_number: str | None = None
         self._commercial_classification: dict[str, object] | None = None
+        self._previous_customer = previous_customer
+        # Only the caller's name goes into context up front; the rest of the
+        # record is loaded via load_customer_record after identity is confirmed.
         returning_caller_instructions = ""
         if previous_customer:
-            name = previous_customer.get("name")
-            previous_request = previous_customer.get("previous_request")
-            address_on_file = previous_customer.get("address")
-            record_age, ask_maintenance = describe_record_age(
-                previous_customer.get("updated_at")
-            )
             returning_caller_instructions = RETURNING_CALLER_INSTRUCTIONS.format(
-                name=name,
-                record_age=record_age,
-                previous_request=previous_request,
+                name=previous_customer.get("name")
             )
-            if ask_maintenance:
-                returning_caller_instructions += "\n" + MAINTENANCE_FOLLOWUP_INSTRUCTIONS
-            if address_on_file:
-                returning_caller_instructions += "\n" + ADDRESS_ON_FILE_INSTRUCTIONS.format(
-                    address_on_file=address_on_file
-                )
 
         super().__init__(
             instructions=BASE_INSTRUCTIONS.format(
@@ -139,13 +130,35 @@ class HVACFrontDeskAgent(Agent):
             ).strip(),
             tools=[
                 EndCallTool(
-                    extra_description=END_CALL_EXTRA_DESCRIPTION,
                     delete_room=True,
                     end_instructions=END_CALL_GOODBYE_INSTRUCTIONS,
                     ignore_on_enter=True,
                 )
             ],
         )
+
+    @function_tool(description=LOAD_CUSTOMER_RECORD_DESCRIPTION)
+    async def load_customer_record(self, context: RunContext) -> dict[str, object]:
+        record = self._previous_customer
+        if not record:
+            return {
+                "status": "NO_RECORD",
+                "message": "There is no record for this number. Continue as a new caller.",
+            }
+        record_age, ask_maintenance = describe_record_age(record.get("updated_at"))
+        message = CUSTOMER_RECORD_LOADED_INSTRUCTIONS.format(record_age=record_age)
+        if ask_maintenance:
+            message += "\n" + MAINTENANCE_FOLLOWUP_INSTRUCTIONS
+        address_on_file = record.get("address")
+        if address_on_file:
+            message += "\n" + ADDRESS_ON_FILE_INSTRUCTIONS.format(
+                address_on_file=address_on_file
+            )
+        return {
+            **{key: value for key, value in record.items() if key != "phone_number"},
+            "record_age": record_age,
+            "message": message,
+        }
 
     @function_tool(description=CHECK_SERVICE_LOCATION_DESCRIPTION)
     async def check_service_location(
@@ -612,7 +625,7 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
     previous_customer = await lookup_customer(phone_number)
     session = AgentSession(
         stt=inference.STT(model="deepgram/nova-3", language="en"),
-        llm=inference.LLM(model="google/gemma-4-31b-it"),
+        llm=openai_plugin.LLM.with_cerebras(model="gpt-oss-120b"),
         tts=inference.TTS(model="inworld/inworld-tts-2", voice="Ashley"),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
@@ -624,7 +637,7 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
     )
     ctx.add_shutdown_callback(agent.save_customer_memory)
     await session.start(room=ctx.room, agent=agent)
-    await session.generate_reply(instructions=GREETING_INSTRUCTIONS)
+    await session.say(GREETING_INSTRUCTIONS)
 
 
 if __name__ == "__main__":

@@ -115,9 +115,15 @@ async def check_service_location(address: str) -> dict[str, object]:
         or component.get("spellCorrected")
         or component.get("replaced")
     ]
+    metadata = result.get("metadata", {})
     validation = {
         "status": action,
         "original_address": address,
+        "address_metadata": {
+            "business": metadata.get("business"),
+            "residential": metadata.get("residential"),
+            "po_box": metadata.get("poBox"),
+        },
         "standardized_address": validated_address.get("formattedAddress"),
         "unit": unit,
         "missing_components": validated_address.get("missingComponentTypes", []),

@@ -10,6 +10,7 @@ from workers import Response, WorkerEntrypoint
 
 from callers import handle_lookup, handle_remember
 from commercial_services import handle_classify, handle_commercial_request
+from dashboard import handle_dashboard, handle_emergency_queue
 from scheduling import (
     handle_availability,
     handle_book,
@@ -27,10 +28,16 @@ class Default(WorkerEntrypoint):
         if path == "/health":
             return Response.json({"status": "OK"})
 
+        if path in {"/", "/dashboard"} and request.method == "GET":
+            return handle_dashboard()
+
         authorization = request.headers.get("authorization")
         expected_authorization = f"Bearer {self.env.CUSTOMER_MEMORY_TOKEN}"
         if authorization != expected_authorization:
             return Response.json({"error": "UNAUTHORIZED"}, status=401)
+
+        if path == "/api/emergency-queue" and request.method == "GET":
+            return await handle_emergency_queue(self.env)
 
         if request.method != "POST":
             return Response.json({"error": "METHOD_NOT_ALLOWED"}, status=405)

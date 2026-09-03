@@ -4,13 +4,21 @@
   "main": "src/entry.py",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["python_workers"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true
+    }
+  },
   "ai": {
     "binding": "AI"
   },
   "kv_namespaces": [
     {
       "binding": "CALLERS",
-      "id": "be990dde2c7a43cba805cf2a97d56fe7"
+      "id": "be990dde2c7a43cba805cf2a97d56fe7",
+      "remote": true
     }
   ]
 }
