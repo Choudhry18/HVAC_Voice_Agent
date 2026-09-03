@@ -119,11 +119,9 @@ async def check_service_location(address: str) -> dict[str, object]:
     validation = {
         "status": action,
         "original_address": address,
-        "address_metadata": {
-            "business": metadata.get("business"),
-            "residential": metadata.get("residential"),
-            "po_box": metadata.get("poBox"),
-        },
+        "is_business": metadata.get("business"),
+        "is_residential": metadata.get("residential"),
+        "is_po_box": metadata.get("poBox"),
         "standardized_address": validated_address.get("formattedAddress"),
         "unit": unit,
         "missing_components": validated_address.get("missingComponentTypes", []),

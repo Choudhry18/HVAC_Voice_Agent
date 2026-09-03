@@ -9,8 +9,10 @@ from workers import Response
 from callers import normalize_phone_number
 from commercial_services import (
     MINIMUM_CLASSIFICATION_CONFIDENCE,
+    classify_issue,
     commercial_service,
 )
+from emergency_services import grade_emergency
 from timeslots import (
     BUSINESS_CLOSE_HOUR,
     BUSINESS_OPEN_HOUR,
@@ -59,23 +61,95 @@ async def handle_availability(env, body: dict):
     location = str(body.get("location", "")).strip()
     if location not in SERVICE_LOCATIONS:
         return Response.json({"error": "UNKNOWN_LOCATION"}, status=400)
-    is_emergency = bool(body.get("is_emergency", False))
-    severe_weather = bool(body.get("severe_weather", False))
     property_type = str(body.get("property_type", "residential")).strip().lower()
+    issue_type = str(body.get("issue_type", "other")).strip().lower()
     service_code = str(body.get("service_code", "")).strip()
+    issue_description = str(body.get("issue_description", "")).strip()
+    equipment_details = str(body.get("equipment_details", "")).strip()
+    escalation_context = str(body.get("escalation_context", "")).strip()
+    weather = body.get("weather")
+    if not isinstance(weather, dict):
+        weather = {"status": "UNAVAILABLE"}
+    try:
+        classification_confidence = float(
+            body.get("classification_confidence", 0.0)
+        )
+    except (TypeError, ValueError):
+        classification_confidence = 0.0
     preferred_date = str(body.get("preferred_date", "") or "").strip()
     time_preference = str(body.get("time_preference", "") or "").strip().lower()
 
     if property_type not in {"residential", "commercial"}:
         return Response.json({"error": "INVALID_PROPERTY_TYPE"}, status=400)
 
+    emergency_assessment = await grade_emergency(
+        env,
+        property_type=property_type,
+        issue_type=issue_type,
+        issue_description=issue_description,
+        equipment_details=equipment_details,
+        escalation_context=escalation_context,
+        weather=weather,
+    )
+    is_emergency = emergency_assessment["is_emergency"]
+    temperature = weather.get("temperature_fahrenheit")
+    thunderstorm = weather.get("thunderstorm_probability")
+    severe_weather = (
+        isinstance(temperature, (int, float))
+        and (temperature >= 100 or temperature <= 32)
+    ) or (
+        isinstance(thunderstorm, (int, float)) and thunderstorm >= 50
+    )
+
+    def assessed(payload: dict) -> dict:
+        return {
+            **payload,
+            "is_emergency": is_emergency,
+            "emergency_assessment": emergency_assessment,
+        }
+
     service = None
     required_skill = None
     duration_hours = SLOT_HOURS
+    classification = None
     if property_type == "commercial":
+        if not service_code:
+            classification = await classify_issue(env, issue_description)
+            if classification.get("status") != "CLASSIFIED":
+                return Response.json(
+                    assessed({
+                        **classification,
+                        "property_type": "commercial",
+                        "review_reason": str(
+                            classification.get("reason", "CLASSIFICATION_UNCLEAR")
+                        ).upper(),
+                        "message": (
+                            "Collect the remaining details, save a service "
+                            "request for staff review, and do not "
+                            "offer appointment times."
+                        ),
+                    })
+                )
+            service_code = str(classification.get("service_code", "")).strip()
+            classification_confidence = float(
+                classification.get("confidence", 0.0)
+            )
         service, error = _commercial_booking_service(service_code)
         if error:
-            return Response.json({"error": error}, status=400)
+            return Response.json(
+                assessed({
+                    "status": "STAFF_REVIEW",
+                    "property_type": "commercial",
+                    "service_code": service_code,
+                    "classification_confidence": classification_confidence,
+                    "review_reason": error,
+                    "message": (
+                        "This service cannot be scheduled automatically. Collect "
+                        "the remaining details, save a service request, and tell "
+                        "the caller that staff will follow up."
+                    ),
+                })
+            )
         required_skill = service["required_skill"]
         duration_hours = int(service["duration_hours"])
 
@@ -89,8 +163,24 @@ async def handle_availability(env, body: dict):
             if technician_has_skill(tech, required_skill)
         ]
     if not technicians:
-        error = "NO_QUALIFIED_TECHNICIANS" if required_skill else "NO_TECHNICIANS"
-        return Response.json({"error": error}, status=404)
+        review_reason = (
+            "NO_QUALIFIED_TECHNICIAN" if required_skill else "NO_TECHNICIANS"
+        )
+        response = {
+            "status": "STAFF_REVIEW",
+            "property_type": property_type,
+            "service_code": service_code,
+            "classification_confidence": classification_confidence,
+            "review_reason": review_reason,
+            "message": (
+                "No suitable technician is available. Collect the remaining "
+                "details, save a service request, and tell the caller that "
+                "staff will follow up."
+            ),
+        }
+        if classification:
+            response["classification_reason"] = classification.get("reason", "")
+        return Response.json(assessed(response))
 
     now = datetime.now(BUSINESS_TIMEZONE)
     within_business_hours = BUSINESS_OPEN_HOUR <= now.hour < BUSINESS_CLOSE_HOUR
@@ -154,6 +244,32 @@ async def handle_availability(env, body: dict):
                     "surcharge_note": "MUST_WARN_CALLER_HIGHER_COST",
                 }
 
+    if not filtered and not (
+        isinstance(after_hours_dispatch, dict)
+        and after_hours_dispatch.get("available")
+    ):
+        review_reason = (
+            "NO_ON_CALL_TECHNICIAN"
+            if is_emergency
+            and isinstance(after_hours_dispatch, dict)
+            and after_hours_dispatch.get("reason") == "NO_ON_CALL_TECH"
+            else "NO_SLOTS"
+        )
+        return Response.json(
+            assessed({
+                "status": "STAFF_REVIEW",
+                "property_type": property_type,
+                "service_code": service_code,
+                "classification_confidence": classification_confidence,
+                "review_reason": review_reason,
+                "message": (
+                    "No appointment can be offered. Collect the remaining "
+                    "details, save a service request, and tell the caller that "
+                    "staff will follow up."
+                ),
+            })
+        )
+
     response = {
         "status": "OK",
         "location": location,
@@ -162,6 +278,8 @@ async def handle_availability(env, body: dict):
         "current_time_local": now.isoformat(),
         "slots": filtered,
         "after_hours_dispatch": after_hours_dispatch,
+        "is_emergency": is_emergency,
+        "emergency_assessment": emergency_assessment,
     }
     if service:
         response.update(
@@ -170,9 +288,12 @@ async def handle_availability(env, body: dict):
                 "service_label": service["label"],
                 "required_skill": required_skill,
                 "duration_hours": duration_hours,
-                "appointment_status": "PENDING_CONFIRMATION",
+                "appointment_status": "CONFIRMED",
+                "classification_confidence": classification_confidence,
             }
         )
+        if classification:
+            response["classification_reason"] = classification.get("reason", "")
     if recommendation:
         response["recommendation"] = recommendation
     if note:
@@ -212,6 +333,8 @@ async def handle_book(env, body: dict):
         return Response.json({"error": "MISSING_FIELDS"}, status=400)
     if property_type not in {"residential", "commercial"}:
         return Response.json({"error": "INVALID_PROPERTY_TYPE"}, status=400)
+    if after_hours and not is_emergency:
+        return Response.json({"error": "AFTER_HOURS_REQUIRES_EMERGENCY"}, status=400)
 
     service = None
     required_skill = None
@@ -261,9 +384,7 @@ async def handle_book(env, body: dict):
         return Response.json({"error": "SLOT_TAKEN"}, status=409)
 
     booking_id = f"bk-{uuid.uuid4().hex[:8]}"
-    booking_status = (
-        "PENDING_CONFIRMATION" if property_type == "commercial" else "CONFIRMED"
-    )
+    booking_status = "CONFIRMED"
     job = {
         "job_id": booking_id,
         "start": start.isoformat(),
@@ -309,9 +430,7 @@ async def handle_book(env, body: dict):
         "operational_impact": operational_impact,
         "access_notes": access_notes,
         "status": booking_status,
-        "staff_confirmation_status": (
-            "PENDING" if property_type == "commercial" else "NOT_REQUIRED"
-        ),
+        "staff_confirmation_status": "NOT_REQUIRED",
         "booked_at": job["booked_at"],
     }
     await env.CALLERS.put(f"booking:{booking_id}", json.dumps(booking))
@@ -433,22 +552,14 @@ async def handle_booking_update(env, body: dict):
             "property_type": booking.get("property_type", "residential"),
             "service_code": booking.get("service_code", ""),
             "required_skill": required_skill,
-            "status": (
-                "PENDING_CONFIRMATION"
-                if booking.get("property_type") == "commercial"
-                else "CONFIRMED"
-            ),
+            "status": "CONFIRMED",
             "booked_at": now_utc,
         }
         new_jobs = await load_jobs(env, tech_id)
         new_jobs.append(job)
         await env.CALLERS.put(f"jobs:{tech_id}", json.dumps(new_jobs))
 
-        booking_status = (
-            "PENDING_CONFIRMATION"
-            if booking.get("property_type") == "commercial"
-            else "CONFIRMED"
-        )
+        booking_status = "CONFIRMED"
         booking.update(
             {
                 "tech_id": tech_id,
@@ -459,11 +570,7 @@ async def handle_booking_update(env, body: dict):
                 "spoken_time": spoken_slot(start, end),
                 "after_hours_surcharge": False,
                 "status": booking_status,
-                "staff_confirmation_status": (
-                    "PENDING"
-                    if booking.get("property_type") == "commercial"
-                    else "NOT_REQUIRED"
-                ),
+                "staff_confirmation_status": "NOT_REQUIRED",
                 "updated_at": now_utc,
             }
         )

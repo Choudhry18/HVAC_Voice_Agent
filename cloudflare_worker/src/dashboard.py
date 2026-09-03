@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from workers import Response
 
 
-ACTIVE_STATUSES = {"CONFIRMED", "PENDING_CONFIRMATION"}
+ACTIVE_STATUSES = {"CONFIRMED", "PENDING_CONFIRMATION", "STAFF_REVIEW"}
 
 
 def _parse_timestamp(value: object) -> datetime:
@@ -17,28 +17,34 @@ def _parse_timestamp(value: object) -> datetime:
 
 
 async def handle_emergency_queue(env):
-    """Return emergency bookings stored under booking:* keys."""
-    listing = await env.CALLERS.list({"prefix": "booking:", "limit": 1000})
+    """Return booked and unassigned emergency service records."""
     bookings = []
-    for key in listing["keys"]:
-        stored = await env.CALLERS.get(key["name"])
-        if not stored:
-            continue
-        try:
-            booking = json.loads(stored)
-        except ValueError:
-            continue
-        if booking.get("is_emergency"):
-            # Bookings created before status tracking was added were confirmed
-            # immediately, so keep them visible in the active queue.
-            booking.setdefault("status", "CONFIRMED")
-            bookings.append(booking)
+    for prefix in ("booking:", "service-request:"):
+        listing = await env.CALLERS.list({"prefix": prefix, "limit": 1000})
+        for key in listing["keys"]:
+            stored = await env.CALLERS.get(key["name"])
+            if not stored:
+                continue
+            try:
+                booking = json.loads(stored)
+            except ValueError:
+                continue
+            if booking.get("is_emergency"):
+                # Bookings created before status tracking was added were confirmed
+                # immediately, so keep them visible in the active queue.
+                booking.setdefault(
+                    "status",
+                    "STAFF_REVIEW" if prefix == "service-request:" else "CONFIRMED",
+                )
+                bookings.append(booking)
 
     bookings.sort(
         key=lambda booking: (
             booking.get("status") not in ACTIVE_STATUSES,
             not booking.get("after_hours_surcharge", False),
-            -_parse_timestamp(booking.get("booked_at")).timestamp(),
+            -_parse_timestamp(
+                booking.get("booked_at") or booking.get("created_at")
+            ).timestamp(),
         )
     )
     active = sum(
@@ -57,7 +63,7 @@ async def handle_emergency_queue(env):
                     for booking in bookings
                 ),
                 "pending": sum(
-                    booking.get("status") == "PENDING_CONFIRMATION"
+                    booking.get("status") in {"PENDING_CONFIRMATION", "STAFF_REVIEW"}
                     for booking in bookings
                 ),
             },
@@ -161,8 +167,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     </main>
   </div>
   <script>
-    const state = { emergencies: [], filter: 'active', token: sessionStorage.getItem('revinDashboardToken') || '' };
-    const activeStatuses = new Set(['CONFIRMED', 'PENDING_CONFIRMATION']);
+    const state = { emergencies: [], filter: 'active', token: __LOCAL_DASHBOARD_TOKEN__ || sessionStorage.getItem('revinDashboardToken') || '' };
+    const activeStatuses = new Set(['CONFIRMED', 'PENDING_CONFIRMATION', 'STAFF_REVIEW']);
     const queue = document.querySelector('#queue');
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
     const formatPhone = value => { const d = String(value || '').replace(/\D/g,'').slice(-10); return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : value || 'No phone'; };
@@ -177,7 +183,7 @@ DASHBOARD_HTML = r"""<!doctype html>
           <div class="priority"><i></i>${x.after_hours_surcharge ? 'After-hours' : 'Emergency'}</div>
           <div class="customer"><strong>${escapeHtml(x.customer_name || x.business_name || 'Unknown caller')}</strong><div class="meta">${escapeHtml(formatPhone(x.customer_phone || x.site_contact_phone))} · ${escapeHtml(x.location || 'Unassigned location')}</div><div class="meta">${escapeHtml(x.summary || x.issue_description || 'No issue summary')}</div></div>
           <div class="tech"><strong>${escapeHtml(x.tech_name || 'Unassigned')}</strong><div class="meta">${escapeHtml(x.address || 'No address')}</div></div>
-          <div class="time"><strong>${escapeHtml(formatTime(x.start))}</strong><div class="meta">${escapeHtml(age(x.booked_at))}</div><span class="pill ${pending ? 'pending' : status === 'CONFIRMED' ? 'confirmed' : ''}">${escapeHtml(status.replaceAll('_',' '))}</span></div>
+          <div class="time"><strong>${escapeHtml(formatTime(x.start))}</strong><div class="meta">${escapeHtml(age(x.booked_at || x.created_at))}</div><span class="pill ${pending || status === 'STAFF_REVIEW' ? 'pending' : status === 'CONFIRMED' ? 'confirmed' : ''}">${escapeHtml(status.replaceAll('_',' '))}</span></div>
           <div class="chev">›</div>
         </article>`;
       }).join('');
@@ -212,9 +218,12 @@ DASHBOARD_HTML = r"""<!doctype html>
 </html>"""
 
 
-def handle_dashboard():
+def handle_dashboard(local_token: str | None = None):
+    html = DASHBOARD_HTML.replace(
+        "__LOCAL_DASHBOARD_TOKEN__", json.dumps(local_token)
+    )
     return Response(
-        DASHBOARD_HTML,
+        html,
         headers={
             "content-type": "text/html; charset=utf-8",
             "cache-control": "no-store",

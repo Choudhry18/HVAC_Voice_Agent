@@ -16,7 +16,6 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.beta.tools import EndCallTool
-from livekit.plugins import openai as openai_plugin
 
 from customer_memory_service import lookup_customer, record_note, remember_customer
 from location_service import check_service_location as resolve_service_location
@@ -28,26 +27,22 @@ from prompts import (
     BASE_INSTRUCTIONS,
     BOOK_APPOINTMENT_DESCRIPTION,
     CHECK_SERVICE_LOCATION_DESCRIPTION,
-    CLASSIFY_COMMERCIAL_ISSUE_DESCRIPTION,
     END_CALL_GOODBYE_INSTRUCTIONS,
     FIND_APPOINTMENT_SLOTS_DESCRIPTION,
     GREETING_INSTRUCTIONS,
     LOOKUP_BOOKING_DESCRIPTION,
     MAINTENANCE_FOLLOWUP_INSTRUCTIONS,
     RECORD_CONCERN_NOTE_DESCRIPTION,
-    RECORD_COMMERCIAL_REQUEST_DESCRIPTION,
+    RECORD_SERVICE_REQUEST_DESCRIPTION,
     RETURNING_CALLER_INSTRUCTIONS,
     SEND_BOOKING_CONFIRMATION_DESCRIPTION,
     UPDATE_BOOKING_DESCRIPTION,
 )
 from scheduling_service import (
     book_appointment as request_appointment_booking,
-    classify_commercial_service as request_commercial_classification,
     find_available_slots,
-    is_severe_weather,
     lookup_booking as request_booking_lookup,
-    severe_temperature_kind,
-    save_commercial_request,
+    save_service_request,
     update_booking as request_booking_update,
 )
 from weather_service import get_current_weather
@@ -115,6 +110,7 @@ class HVACFrontDeskAgent(Agent):
         self._booking: dict[str, object] | None = None
         self._callback_phone_number: str | None = None
         self._commercial_classification: dict[str, object] | None = None
+        self._emergency_assessment: dict[str, object] | None = None
         self._previous_customer = previous_customer
         # Only the caller's name goes into context up front; the rest of the
         # record is loaded via load_customer_record after identity is confirmed.
@@ -170,6 +166,7 @@ class HVACFrontDeskAgent(Agent):
         self._verified_location = (
             result if result.get("serviceability") == "SERVICEABLE" else None
         )
+        self._emergency_assessment = None
         latitude = result.get("latitude")
         longitude = result.get("longitude")
         if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
@@ -187,37 +184,15 @@ class HVACFrontDeskAgent(Agent):
         except Exception:
             return None
 
-    @function_tool(description=CLASSIFY_COMMERCIAL_ISSUE_DESCRIPTION)
-    async def classify_commercial_issue(
-        self,
-        context: RunContext,
-        issue_description: str,
-    ) -> dict[str, object]:
-        result = await request_commercial_classification(issue_description)
-        self._commercial_classification = dict(result)
-        if result.get("status") == "CLASSIFIED":
-            return {
-                **result,
-                "message": (
-                    "Continue the commercial intake. Use this classification "
-                    "when you search for appointment times."
-                ),
-            }
-        return {
-            **result,
-            "message": (
-                "Collect the remaining commercial details, save a commercial "
-                "request for staff review, and do not offer appointment times."
-            ),
-        }
-
     @function_tool(description=FIND_APPOINTMENT_SLOTS_DESCRIPTION)
     async def find_appointment_slots(
         self,
         context: RunContext,
-        is_emergency: bool,
         issue_type: str,
         property_type: str = "residential",
+        issue_description: str = "",
+        equipment_details: str = "",
+        escalation_context: str = "",
         preferred_date: str | None = None,
         time_preference: str | None = None,
     ) -> dict[str, object]:
@@ -236,6 +211,7 @@ class HVACFrontDeskAgent(Agent):
             }
         effective_property_type = property_type.strip().lower()
         service_code = None
+        classification_confidence = None
         if self._commercial_classification:
             effective_property_type = "commercial"
         if self._booking:
@@ -245,53 +221,95 @@ class HVACFrontDeskAgent(Agent):
         if effective_property_type == "commercial":
             if self._commercial_classification:
                 service_code = self._commercial_classification.get("service_code")
+                classification_confidence = self._commercial_classification.get(
+                    "confidence"
+                )
             elif self._booking:
                 service_code = self._booking.get("service_code")
-            if not service_code or service_code == "other_or_unclear":
-                return {
-                    "status": "COMMERCIAL_CLASSIFICATION_REQUIRED",
-                    "message": (
-                        "Classify the commercial issue before searching for "
-                        "appointment times."
-                    ),
-                }
+                classification_confidence = self._booking.get(
+                    "classification_confidence"
+                )
+            if service_code == "other_or_unclear":
+                service_code = None
+                classification_confidence = None
+        scheduling_issue = issue_description.strip()
+        if effective_property_type == "commercial" and not service_code:
+            scheduling_issue = " ".join(
+                part
+                for part in (
+                    f"Issue: {issue_description.strip()}"
+                    if issue_description.strip()
+                    else "",
+                    f"Equipment: {equipment_details.strip()}"
+                    if equipment_details.strip()
+                    else "",
+                )
+                if part
+            )
         weather = await self._current_weather()
-        severe_weather = is_severe_weather(weather)
-        # An outage that matches the measured severe temperature is an
-        # emergency even if triage missed it: the LLM knows what broke, the
-        # weather data knows how extreme it is outside.
-        temperature_kind = severe_temperature_kind(weather)
-        escalated = not is_emergency and (
-            (temperature_kind == "heat" and issue_type == "cooling_failure")
-            or (temperature_kind == "cold" and issue_type == "heating_failure")
-        )
-        is_emergency = is_emergency or escalated
+        self._emergency_assessment = None
         result = await find_available_slots(
             location=location,
-            is_emergency=is_emergency,
-            severe_weather=severe_weather,
+            issue_type=issue_type,
             property_type=effective_property_type,
             service_code=str(service_code or "") or None,
+            classification_confidence=(
+                float(classification_confidence)
+                if classification_confidence is not None
+                else None
+            ),
+            issue_description=scheduling_issue or None,
+            equipment_details=equipment_details or None,
+            escalation_context=escalation_context or None,
+            weather=weather,
             preferred_date=preferred_date,
             time_preference=time_preference,
         )
+        assessment = result.get("emergency_assessment")
+        if isinstance(assessment, dict):
+            self._emergency_assessment = assessment
+        if effective_property_type == "commercial" and result.get("status") in {
+            "OK",
+            "STAFF_REVIEW",
+        }:
+            result_service_code = str(
+                result.get("service_code", "other_or_unclear")
+            )
+            result_confidence = result.get(
+                "classification_confidence", result.get("confidence", 0.0)
+            )
+            self._commercial_classification = {
+                "status": (
+                    "CLASSIFIED" if result.get("status") == "OK" else "STAFF_REVIEW"
+                ),
+                "service_code": result_service_code,
+                "confidence": result_confidence,
+                "reason": result.get(
+                    "classification_reason", result.get("reason", "")
+                ),
+            }
         if result.get("status") == "OK":
             # Give the LLM a short weather summary only when severe weather is
             # actually escalating this emergency (same gate as the scheduler),
             # so it can acknowledge the conditions while offering slots.
-            if is_emergency and severe_weather and weather:
+            temperature = weather.get("temperature_fahrenheit") if weather else None
+            thunderstorm = weather.get("thunderstorm_probability") if weather else None
+            severe_weather = bool(result.get("is_emergency")) and (
+                (
+                    isinstance(temperature, (int, float))
+                    and (temperature >= 100 or temperature <= 32)
+                )
+                or (
+                    isinstance(thunderstorm, (int, float))
+                    and thunderstorm >= 50
+                )
+            )
+            if severe_weather and weather:
                 result["severe_weather_context"] = {
                     "temperature_fahrenheit": weather.get("temperature_fahrenheit"),
                     "feels_like_fahrenheit": weather.get("feels_like_fahrenheit"),
                     "condition": weather.get("condition"),
                 }
-            if escalated:
-                result["message"] = (
-                    "Current temperatures at the service address make this "
-                    "outage an emergency. Treat the request as an emergency "
-                    "for the rest of the call, including booking, and offer "
-                    "the earliest option first."
-                )
         # Keep technician names out of the conversation; the caller only needs times.
         slots = result.get("slots")
         if isinstance(slots, list):
@@ -313,7 +331,6 @@ class HVACFrontDeskAgent(Agent):
         customer_name: str,
         callback_number: str,
         summary: str,
-        is_emergency: bool,
         after_hours: bool,
         property_type: str = "residential",
         business_name: str = "",
@@ -334,6 +351,14 @@ class HVACFrontDeskAgent(Agent):
                     "before booking."
                 ),
             }
+        if self._emergency_assessment is None:
+            return {
+                "status": "EMERGENCY_ASSESSMENT_REQUIRED",
+                "message": (
+                    "Call find_appointment_slots before booking so the request "
+                    "can be assessed and a valid slot selected."
+                ),
+            }
         address = str(
             self._verified_location.get("standardized_address")
             or self._verified_location.get("original_address")
@@ -349,7 +374,9 @@ class HVACFrontDeskAgent(Agent):
             classification = self._commercial_classification or {}
             if classification.get("status") != "CLASSIFIED":
                 return {
-                    "status": "COMMERCIAL_CLASSIFICATION_REQUIRED",
+                    "status": "STAFF_REVIEW",
+                    "property_type": "commercial",
+                    "review_reason": "COMMERCIAL_CLASSIFICATION_REQUIRED",
                     "message": (
                         "Save this request for staff review. Do not book a "
                         "commercial time without a supported classification."
@@ -371,7 +398,9 @@ class HVACFrontDeskAgent(Agent):
             ),
             address=address,
             summary=summary,
-            is_emergency=is_emergency,
+            is_emergency=bool(
+                (self._emergency_assessment or {}).get("is_emergency", False)
+            ),
             after_hours=after_hours,
             property_type=property_type,
             service_code=service_code,
@@ -405,15 +434,19 @@ class HVACFrontDeskAgent(Agent):
             }
         return result
 
-    @function_tool(description=RECORD_COMMERCIAL_REQUEST_DESCRIPTION)
-    async def record_commercial_request(
+    @function_tool(description=RECORD_SERVICE_REQUEST_DESCRIPTION)
+    async def record_service_request(
         self,
         context: RunContext,
-        business_name: str,
-        site_contact_name: str,
-        site_contact_phone: str,
+        customer_name: str,
+        callback_number: str,
         service_address: str,
         issue_description: str,
+        property_type: str,
+        review_reason: str,
+        business_name: str = "",
+        site_contact_name: str = "",
+        site_contact_phone: str = "",
         equipment_details: str = "",
         operational_impact: str = "",
         access_notes: str = "",
@@ -427,7 +460,23 @@ class HVACFrontDeskAgent(Agent):
                 or self._verified_location.get("original_address")
                 or address
             )
-        result = await save_commercial_request(
+        confirmed_callback_number = (
+            callback_number.strip() or self.phone_number or CONSOLE_TEST_PHONE
+        )
+        result = await save_service_request(
+            customer_name=customer_name,
+            customer_phone=confirmed_callback_number,
+            property_type=property_type,
+            is_emergency=bool(
+                (self._emergency_assessment or {}).get("is_emergency", False)
+            ),
+            emergency_reason_code=str(
+                (self._emergency_assessment or {}).get("reason_code", "")
+            ),
+            emergency_reason=str(
+                (self._emergency_assessment or {}).get("reason", "")
+            ),
+            review_reason=review_reason,
             business_name=business_name,
             site_contact_name=site_contact_name,
             site_contact_phone=site_contact_phone,
@@ -445,11 +494,11 @@ class HVACFrontDeskAgent(Agent):
             preferred_time=preferred_time,
         )
         if result.get("saved"):
+            self._callback_phone_number = confirmed_callback_number
             return {
                 **result,
                 "message": (
-                    "Tell the caller the commercial team will review the request "
-                    "and follow up."
+                    "Tell the caller the team will review the request and follow up."
                 ),
             }
         return result
@@ -625,7 +674,7 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
     previous_customer = await lookup_customer(phone_number)
     session = AgentSession(
         stt=inference.STT(model="deepgram/nova-3", language="en"),
-        llm=openai_plugin.LLM.with_cerebras(model="gpt-oss-120b"),
+        llm=inference.LLM(model="google/gemma-4-31b-it"),
         tts=inference.TTS(model="inworld/inworld-tts-2", voice="Ashley"),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),

@@ -1,10 +1,6 @@
-"""Commercial service classification and staff-review records."""
+"""Commercial service catalog and issue classification."""
 
 import json
-import uuid
-from datetime import datetime, timezone
-
-from workers import Response
 
 from prompts import CLASSIFICATION_SYSTEM_PROMPT
 
@@ -193,41 +189,3 @@ async def classify_issue(env, issue_description: str) -> dict:
         "confidence": max(0.0, min(confidence, 1.0)),
         "reason": reason,
     }
-
-
-async def handle_classify(env, body: dict):
-    issue_description = str(body.get("issue_description", "")).strip()
-    if not issue_description:
-        return Response.json({"error": "ISSUE_DESCRIPTION_REQUIRED"}, status=400)
-    return Response.json(await classify_issue(env, issue_description))
-
-
-async def handle_commercial_request(env, body: dict):
-    required = {
-        "business_name": str(body.get("business_name", "")).strip(),
-        "site_contact_name": str(body.get("site_contact_name", "")).strip(),
-        "site_contact_phone": str(body.get("site_contact_phone", "")).strip(),
-        "address": str(body.get("address", "")).strip(),
-        "issue_description": str(body.get("issue_description", "")).strip(),
-    }
-    if not all(required.values()):
-        return Response.json({"error": "MISSING_FIELDS"}, status=400)
-
-    request_id = f"cr-{uuid.uuid4().hex[:8]}"
-    record = {
-        "request_id": request_id,
-        "property_type": "commercial",
-        **required,
-        "service_code": str(
-            body.get("service_code", "other_or_unclear")
-        ).strip(),
-        "classification_confidence": body.get("classification_confidence", 0.0),
-        "equipment_details": str(body.get("equipment_details", "")).strip(),
-        "operational_impact": str(body.get("operational_impact", "")).strip(),
-        "access_notes": str(body.get("access_notes", "")).strip(),
-        "preferred_time": str(body.get("preferred_time", "")).strip(),
-        "status": "STAFF_REVIEW",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await env.CALLERS.put(f"commercial-request:{request_id}", json.dumps(record))
-    return Response.json({"saved": True, **record})

@@ -17,17 +17,18 @@ flowchart TD
     E --> F[Classify the issue and equipment type]
     F --> G{Supported classification with enough confidence?}
 
-    G -->|No| H[Save request for commercial staff review]
+    G -->|No| H[Save unbooked service request for staff review]
     G -->|Yes| I[Standardize address and ask caller to confirm it]
     I --> J{Address verified and in service area?}
-    J -->|No| K[Commercial team follows up]
+    J -->|No| H
     J -->|Yes| L{Qualified technician and time available?}
 
     L -->|No| H
     L -->|Yes| M{Emergency outside business hours?}
     M -->|No| N[Offer up to three appointment windows]
     M -->|Yes| O{On-call technician available?}
-    O -->|No| N
+    O -->|No and no regular slot| H
+    O -->|No but regular slot available| N
     O -->|Yes| P[Explain the higher after-hours cost]
     P --> Q{Caller agrees?}
     Q -->|No| N
@@ -36,9 +37,9 @@ flowchart TD
 
     R --> S{Caller confirms everything?}
     S -->|No| E
-    S -->|Yes| T[Create tentative commercial booking]
-    T --> U[Mark as pending staff confirmation]
-    U --> V[Read back the window and offer an email summary]
+    S -->|Yes| T[Create confirmed commercial booking]
+    T --> U[Reserve the technician and appointment window]
+    U --> V[Read back the confirmed window and offer an email confirmation]
 
-    H --> K
+    H --> K[Service team follows up]
 ```

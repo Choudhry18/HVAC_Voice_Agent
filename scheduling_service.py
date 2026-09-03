@@ -2,20 +2,6 @@ import httpx
 
 from customer_memory_service import request_settings
 
-SEVERE_HEAT_FAHRENHEIT = 100.0
-SEVERE_COLD_FAHRENHEIT = 32.0
-SEVERE_THUNDERSTORM_PROBABILITY = 50.0
-SEVERE_CONDITION_TYPES = {
-    "THUNDERSTORM",
-    "THUNDERSHOWER",
-    "HEAVY_THUNDERSTORM",
-    "SCATTERED_THUNDERSTORMS",
-    "HAIL",
-    "HAIL_SHOWERS",
-    "SNOW_STORM",
-    "BLIZZARD",
-}
-
 SERVICE_UNAVAILABLE_RESULT = {
     "status": "SERVICE_UNAVAILABLE",
     "message": (
@@ -25,39 +11,16 @@ SERVICE_UNAVAILABLE_RESULT = {
 }
 
 
-def severe_temperature_kind(weather: dict[str, object] | None) -> str | None:
-    """Return "heat" or "cold" when the measured temperature alone is severe."""
-    if not weather or weather.get("status") != "OK":
-        return None
-    temperature = weather.get("temperature_fahrenheit")
-    if isinstance(temperature, (int, float)):
-        if temperature >= SEVERE_HEAT_FAHRENHEIT:
-            return "heat"
-        if temperature <= SEVERE_COLD_FAHRENHEIT:
-            return "cold"
-    return None
-
-
-def is_severe_weather(weather: dict[str, object] | None) -> bool:
-    if not weather or weather.get("status") != "OK":
-        return False
-    temperature = weather.get("temperature_fahrenheit")
-    if isinstance(temperature, (int, float)):
-        if temperature >= SEVERE_HEAT_FAHRENHEIT or temperature <= SEVERE_COLD_FAHRENHEIT:
-            return True
-    thunderstorm = weather.get("thunderstorm_probability")
-    if isinstance(thunderstorm, (int, float)) and thunderstorm >= SEVERE_THUNDERSTORM_PROBABILITY:
-        return True
-    condition_type = str(weather.get("condition_type", "")).upper()
-    return condition_type in SEVERE_CONDITION_TYPES
-
-
 async def find_available_slots(
     location: str,
-    is_emergency: bool,
-    severe_weather: bool,
+    issue_type: str,
     property_type: str = "residential",
     service_code: str | None = None,
+    classification_confidence: float | None = None,
+    issue_description: str | None = None,
+    equipment_details: str | None = None,
+    escalation_context: str | None = None,
+    weather: dict[str, object] | None = None,
     preferred_date: str | None = None,
     time_preference: str | None = None,
 ) -> dict[str, object]:
@@ -65,27 +28,33 @@ async def find_available_slots(
     if not url:
         return SERVICE_UNAVAILABLE_RESULT
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         try:
             response = await client.post(
                 f"{url.rstrip('/')}/availability",
                 json={
                     "location": location,
-                    "is_emergency": is_emergency,
-                    "severe_weather": severe_weather,
+                    "issue_type": issue_type,
                     "property_type": property_type,
                     "service_code": service_code,
+                    "classification_confidence": classification_confidence,
+                    "issue_description": issue_description,
+                    "equipment_details": equipment_details,
+                    "escalation_context": escalation_context,
+                    "weather": weather,
                     "preferred_date": preferred_date,
                     "time_preference": time_preference,
                 },
                 headers=headers,
             )
-            if response.status_code in {400, 404} and property_type == "commercial":
+            if response.status_code == 404:
                 return {
                     "status": "STAFF_REVIEW",
+                    "property_type": property_type,
+                    "review_reason": "NO_TECHNICIANS",
                     "message": (
-                        "No qualified commercial time is available. Collect the "
-                        "remaining details, save a commercial request, and tell "
+                        "No suitable appointment is available. Collect the "
+                        "remaining details, save a service request, and tell "
                         "the caller that staff will follow up."
                     ),
                 }
@@ -228,11 +197,13 @@ async def book_appointment(
                         "find_appointment_slots again to offer other times."
                     ),
                 }
-            if response.status_code == 400 and property_type == "commercial":
+            if response.status_code == 400:
                 return {
                     "status": "STAFF_REVIEW",
+                    "property_type": property_type,
+                    "review_reason": "BOOKING_REJECTED",
                     "message": (
-                        "Do not book this commercial request. Save it for staff "
+                        "Do not claim the appointment is booked. Save the request for staff "
                         "review and tell the caller that staff will follow up."
                     ),
                 }
@@ -242,37 +213,14 @@ async def book_appointment(
             return SERVICE_UNAVAILABLE_RESULT
 
 
-async def classify_commercial_service(
-    issue_description: str,
-) -> dict[str, object]:
-    url, headers = request_settings()
-    if not url:
-        return {
-            "status": "STAFF_REVIEW",
-            "service_code": "other_or_unclear",
-            "confidence": 0.0,
-            "message": "Collect the commercial request for staff review.",
-        }
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        try:
-            response = await client.post(
-                f"{url.rstrip('/')}/classify-commercial-service",
-                json={"issue_description": issue_description},
-                headers=headers,
-            )
-            response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError):
-            return {
-                "status": "STAFF_REVIEW",
-                "service_code": "other_or_unclear",
-                "confidence": 0.0,
-                "message": "Collect the commercial request for staff review.",
-            }
-
-
-async def save_commercial_request(
+async def save_service_request(
+    customer_name: str,
+    customer_phone: str,
+    property_type: str,
+    is_emergency: bool,
+    emergency_reason_code: str,
+    emergency_reason: str,
+    review_reason: str,
     business_name: str,
     site_contact_name: str,
     site_contact_phone: str,
@@ -292,8 +240,15 @@ async def save_commercial_request(
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
             response = await client.post(
-                f"{url.rstrip('/')}/commercial-request",
+                f"{url.rstrip('/')}/service-request",
                 json={
+                    "customer_name": customer_name,
+                    "customer_phone": customer_phone,
+                    "property_type": property_type,
+                    "is_emergency": is_emergency,
+                    "emergency_reason_code": emergency_reason_code,
+                    "emergency_reason": emergency_reason,
+                    "review_reason": review_reason,
                     "business_name": business_name,
                     "site_contact_name": site_contact_name,
                     "site_contact_phone": site_contact_phone,

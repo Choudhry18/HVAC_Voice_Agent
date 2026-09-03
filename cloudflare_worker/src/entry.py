@@ -1,7 +1,7 @@
 """Worker entrypoint: request routing and bearer-token auth only.
 
-Endpoint handlers live in callers.py, commercial_services.py, scheduling.py,
-notes.py, and seed.py.
+Endpoint handlers live in callers.py, service_requests.py, scheduling.py,
+notes.py, and seed.py. Commercial classification lives in commercial_services.py.
 """
 
 from urllib.parse import urlparse
@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 from workers import Response, WorkerEntrypoint
 
 from callers import handle_lookup, handle_remember
-from commercial_services import handle_classify, handle_commercial_request
 from dashboard import handle_dashboard, handle_emergency_queue
+from service_requests import handle_service_request
 from scheduling import (
     handle_availability,
     handle_book,
@@ -23,13 +23,19 @@ from seed import handle_seed
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        path = urlparse(request.url).path
+        parsed_url = urlparse(request.url)
+        path = parsed_url.path
 
         if path == "/health":
             return Response.json({"status": "OK"})
 
         if path in {"/", "/dashboard"} and request.method == "GET":
-            return handle_dashboard()
+            local_token = (
+                self.env.CUSTOMER_MEMORY_TOKEN
+                if parsed_url.hostname in {"127.0.0.1", "localhost", "::1"}
+                else None
+            )
+            return handle_dashboard(local_token)
 
         authorization = request.headers.get("authorization")
         expected_authorization = f"Bearer {self.env.CUSTOMER_MEMORY_TOKEN}"
@@ -51,10 +57,8 @@ class Default(WorkerEntrypoint):
             return await handle_lookup(self.env, body)
         if path == "/remember":
             return await handle_remember(self.env, body)
-        if path == "/classify-commercial-service":
-            return await handle_classify(self.env, body)
-        if path == "/commercial-request":
-            return await handle_commercial_request(self.env, body)
+        if path == "/service-request":
+            return await handle_service_request(self.env, body)
         if path == "/availability":
             return await handle_availability(self.env, body)
         if path == "/book":
