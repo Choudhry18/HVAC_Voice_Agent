@@ -107,7 +107,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Revin Dispatch Queue</title>
+  <title>Summit Air Dispatch</title>
   <meta name="description" content="Live emergency and staff-review HVAC queue">
   <style>
     :root {
@@ -169,7 +169,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <body>
   <div class="shell">
     <header>
-      <div class="brand"><div class="mark">R</div><div><strong>Revin Dispatch</strong><span>HVAC operations</span></div></div>
+      <div class="brand"><div class="mark">S</div><div><strong>Summit Air Dispatch</strong><span>HVAC operations</span></div></div>
       <div class="live"><i></i><span>Live queue</span></div>
     </header>
     <main>
@@ -187,7 +187,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     <pre class="record-json" id="recordJson"></pre>
   </dialog>
   <script>
-    const state = { records: [], token: __LOCAL_DASHBOARD_TOKEN__ || sessionStorage.getItem('revinDashboardToken') || '' };
+    const state = { records: [], token: __LOCAL_DASHBOARD_TOKEN__ || sessionStorage.getItem('summitAirDashboardToken') || '' };
     const queue = document.querySelector('#queue');
     const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
     const formatPhone = value => { const d = String(value || '').replace(/\D/g,'').slice(-10); return d.length === 10 ? `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}` : value || 'No phone'; };
@@ -216,10 +216,10 @@ DASHBOARD_HTML = r"""<!doctype html>
         if (response.status === 401) throw new Error('That access token was not accepted.');
         if (!response.ok) throw new Error('The queue could not be loaded.');
         const data = await response.json(); state.records = data.records || (data.emergencies || []).map(record => ({record, status: record.status || 'CONFIRMED', is_emergency: true}));
-        sessionStorage.setItem('revinDashboardToken', state.token);
+        sessionStorage.setItem('summitAirDashboardToken', state.token);
         refresh.hidden = false; render();
       } catch (error) {
-        sessionStorage.removeItem('revinDashboardToken'); state.token = '';
+        sessionStorage.removeItem('summitAirDashboardToken'); state.token = '';
         queue.innerHTML = `<div class="locked"><strong>Connect to the dispatch queue</strong><span>Enter the dashboard access token to load dispatch records.</span><form class="auth" id="auth"><input id="token" type="password" autocomplete="current-password" placeholder="Access token" aria-label="Access token" required><button>Connect</button></form><div class="error" id="error">${escapeHtml(error.message)}</div></div>`;
         bindAuth();
       } finally { refresh.disabled = false; }

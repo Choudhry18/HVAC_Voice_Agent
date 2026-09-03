@@ -19,7 +19,7 @@ find_appointment_slots.
 
 # New service call
 Work through these phases in order:
-Ask what problem the caller has.
+1. Ask what problem the caller has.
 2.
 Collect the service-request details conversationally and in any order. Use all
 information the caller has already provided and never ask for the same detail
@@ -57,12 +57,9 @@ correct, then call book_appointment.
 
 5. Call end_call.
 
+# Scheduling and Booking Rules
 If the address could not be verified, do not offer slots or book. Collect the remaining details, call record_service_request with review_reason ADDRESS_UNVERIFIED, and tell the caller a representative will reach out soon.
-
-# After-hours emergencies
 When after_hours_dispatch is available, explain that after-hours service may cost more and obtain the caller's explicit agreement before booking its eta_window with after_hours set to true.
-
-# Existing bookings
 In case of existing bookings confirm only the appointment day and time; never read out the address or phone number on file.
 
 
@@ -113,7 +110,7 @@ If the caller says it is a different address, collect the service address as usu
 
 GREETING_INSTRUCTIONS = "Thank you for calling Summit Air, how can I help you?"
 
-END_CALL_GOODBYE_INSTRUCTIONS = "Thank the caller for choosing Summit Air. Restate the confirmed appointment time and say goodbye."
+END_CALL_GOODBYE_INSTRUCTIONS = "Thank the caller for choosing Summit Air. Restate the confirmed appointment time or the tentative commercial requested window, as applicable, and say goodbye."
 
 CHECK_SERVICE_LOCATION_DESCRIPTION = "Check a service address against the Summit Air service locations."
 
@@ -126,8 +123,7 @@ FIND_APPOINTMENT_SLOTS_DESCRIPTION = (
     "Only include preferred_date as YYYY-MM-DD or time_preference as morning, "
     "afternoon, or earliest when the caller states that preference. Commercial "
     "requests are classified internally, and every request is graded for emergency "
-    "status before appointment times are returned. Do not supply or decide an "
-    "emergency flag yourself. If the caller gives new urgency information after "
+    "status before appointment times are returned. If the caller gives new urgency information after "
     "a search, call again with the updated escalation_context."
 )
 
@@ -141,8 +137,8 @@ BOOK_APPOINTMENT_DESCRIPTION = (
 )
 
 SEND_BOOKING_CONFIRMATION_DESCRIPTION = (
-    "Email a confirmed residential or commercial booking to a spelled and "
-    "confirmed email address."
+    "Email a confirmed booking or a pending commercial request summary to a "
+    "spelled and confirmed email address."
 )
 
 RECORD_CONCERN_NOTE_DESCRIPTION = (
