@@ -3,6 +3,7 @@
 import json
 
 from commercial_services import CLASSIFICATION_MODEL, _classification_from_result
+from observability import log_event
 from prompts import EMERGENCY_CLASSIFICATION_SYSTEM_PROMPT
 
 
@@ -135,6 +136,7 @@ async def grade_emergency(
             assessment = {}
 
     if not assessment:
+        log_event("emergency_grading_fallback", reason="MODEL_UNAVAILABLE")
         return _fallback_assessment(
             issue_type, issue_description, escalation_context, safe_weather
         )

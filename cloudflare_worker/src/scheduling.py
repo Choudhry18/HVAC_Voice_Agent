@@ -13,6 +13,7 @@ from commercial_services import (
     commercial_service,
 )
 from emergency_services import grade_emergency
+from observability import log_event
 from timeslots import (
     BUSINESS_CLOSE_HOUR,
     BUSINESS_OPEN_HOUR,
@@ -58,15 +59,15 @@ def _commercial_booking_service(service_code: object) -> tuple[dict | None, str 
 
 
 async def handle_availability(env, body: dict):
-    location = str(body.get("location", "")).strip()
+    location = str(body.get("location") or "").strip()
     if location not in SERVICE_LOCATIONS:
         return Response.json({"error": "UNKNOWN_LOCATION"}, status=400)
-    property_type = str(body.get("property_type", "residential")).strip().lower()
-    issue_type = str(body.get("issue_type", "other")).strip().lower()
-    service_code = str(body.get("service_code", "")).strip()
-    issue_description = str(body.get("issue_description", "")).strip()
-    equipment_details = str(body.get("equipment_details", "")).strip()
-    escalation_context = str(body.get("escalation_context", "")).strip()
+    property_type = str(body.get("property_type") or "residential").strip().lower()
+    issue_type = str(body.get("issue_type") or "other").strip().lower()
+    service_code = str(body.get("service_code") or "").strip()
+    issue_description = str(body.get("issue_description") or "").strip()
+    equipment_details = str(body.get("equipment_details") or "").strip()
+    escalation_context = str(body.get("escalation_context") or "").strip()
     weather = body.get("weather")
     if not isinstance(weather, dict):
         weather = {"status": "UNAVAILABLE"}
@@ -82,6 +83,18 @@ async def handle_availability(env, body: dict):
     if property_type not in {"residential", "commercial"}:
         return Response.json({"error": "INVALID_PROPERTY_TYPE"}, status=400)
 
+    log_event(
+        "availability_request",
+        location=location,
+        property_type=property_type,
+        issue_type=issue_type,
+        service_code=service_code or None,
+        preferred_date=preferred_date or None,
+        time_preference=time_preference or None,
+        has_escalation_context=bool(escalation_context),
+        weather_status=weather.get("status"),
+    )
+
     emergency_assessment = await grade_emergency(
         env,
         property_type=property_type,
@@ -92,6 +105,12 @@ async def handle_availability(env, body: dict):
         weather=weather,
     )
     is_emergency = emergency_assessment["is_emergency"]
+    log_event(
+        "emergency_assessment",
+        is_emergency=is_emergency,
+        reason_code=emergency_assessment.get("reason_code"),
+        confidence=emergency_assessment.get("confidence"),
+    )
     temperature = weather.get("temperature_fahrenheit")
     thunderstorm = weather.get("thunderstorm_probability")
     severe_weather = (
@@ -115,7 +134,20 @@ async def handle_availability(env, body: dict):
     if property_type == "commercial":
         if not service_code:
             classification = await classify_issue(env, issue_description)
+            log_event(
+                "commercial_classification",
+                status=classification.get("status"),
+                service_code=classification.get("service_code"),
+                confidence=classification.get("confidence"),
+            )
             if classification.get("status") != "CLASSIFIED":
+                log_event(
+                    "no_slots_offered",
+                    stage="commercial_classification",
+                    review_reason=str(
+                        classification.get("reason", "CLASSIFICATION_UNCLEAR")
+                    ).upper(),
+                )
                 return Response.json(
                     assessed({
                         **classification,
@@ -136,6 +168,12 @@ async def handle_availability(env, body: dict):
             )
         service, error = _commercial_booking_service(service_code)
         if error:
+            log_event(
+                "no_slots_offered",
+                stage="commercial_service_lookup",
+                review_reason=error,
+                service_code=service_code,
+            )
             return Response.json(
                 assessed({
                     "status": "STAFF_REVIEW",
@@ -165,6 +203,13 @@ async def handle_availability(env, body: dict):
     if not technicians:
         review_reason = (
             "NO_QUALIFIED_TECHNICIAN" if required_skill else "NO_TECHNICIANS"
+        )
+        log_event(
+            "no_slots_offered",
+            stage="technician_filter",
+            review_reason=review_reason,
+            location=location,
+            required_skill=required_skill,
         )
         response = {
             "status": "STAFF_REVIEW",
@@ -208,6 +253,16 @@ async def handle_availability(env, body: dict):
     if not filtered:
         filtered = slots
         note = "NO_SLOTS_MATCHING_PREFERENCE"
+
+    log_event(
+        "slot_search",
+        technicians=len(technicians),
+        open_slots=len(slots),
+        after_preference_filter=len(filtered),
+        note=note,
+        within_business_hours=within_business_hours,
+        duration_hours=duration_hours,
+    )
 
     recommendation = None
     if is_emergency and severe_weather:
@@ -255,6 +310,13 @@ async def handle_availability(env, body: dict):
             and after_hours_dispatch.get("reason") == "NO_ON_CALL_TECH"
             else "NO_SLOTS"
         )
+        log_event(
+            "no_slots_offered",
+            stage="final",
+            review_reason=review_reason,
+            is_emergency=is_emergency,
+            within_business_hours=within_business_hours,
+        )
         return Response.json(
             assessed({
                 "status": "STAFF_REVIEW",
@@ -298,30 +360,41 @@ async def handle_availability(env, body: dict):
         response["recommendation"] = recommendation
     if note:
         response["note"] = note
+    log_event(
+        "availability_response",
+        slots_returned=len(filtered),
+        after_hours_dispatch=(
+            after_hours_dispatch.get("available")
+            if isinstance(after_hours_dispatch, dict)
+            else None
+        ),
+        recommendation=recommendation,
+        is_emergency=is_emergency,
+    )
     return Response.json(response)
 
 
 async def handle_book(env, body: dict):
-    tech_id = str(body.get("tech_id", "")).strip()
-    start_raw = str(body.get("start", "")).strip()
-    end_raw = str(body.get("end", "")).strip()
-    customer_name = str(body.get("customer_name", "")).strip()
-    customer_phone = normalize_phone_number(str(body.get("customer_phone", "")))
-    address = str(body.get("address", "")).strip()
-    summary = str(body.get("summary", "")).strip()
+    tech_id = str(body.get("tech_id") or "").strip()
+    start_raw = str(body.get("start") or "").strip()
+    end_raw = str(body.get("end") or "").strip()
+    customer_name = str(body.get("customer_name") or "").strip()
+    customer_phone = normalize_phone_number(str(body.get("customer_phone") or ""))
+    address = str(body.get("address") or "").strip()
+    summary = str(body.get("summary") or "").strip()
     is_emergency = bool(body.get("is_emergency", False))
     after_hours = bool(body.get("after_hours", False))
-    property_type = str(body.get("property_type", "residential")).strip().lower()
-    service_code = str(body.get("service_code", "")).strip()
-    business_name = str(body.get("business_name", "")).strip()
-    site_contact_name = str(body.get("site_contact_name", "")).strip()
+    property_type = str(body.get("property_type") or "residential").strip().lower()
+    service_code = str(body.get("service_code") or "").strip()
+    business_name = str(body.get("business_name") or "").strip()
+    site_contact_name = str(body.get("site_contact_name") or "").strip()
     site_contact_phone = normalize_phone_number(
-        str(body.get("site_contact_phone", ""))
+        str(body.get("site_contact_phone") or "")
     )
-    issue_description = str(body.get("issue_description", "")).strip()
-    equipment_details = str(body.get("equipment_details", "")).strip()
-    operational_impact = str(body.get("operational_impact", "")).strip()
-    access_notes = str(body.get("access_notes", "")).strip()
+    issue_description = str(body.get("issue_description") or "").strip()
+    equipment_details = str(body.get("equipment_details") or "").strip()
+    operational_impact = str(body.get("operational_impact") or "").strip()
+    access_notes = str(body.get("access_notes") or "").strip()
     try:
         classification_confidence = float(
             body.get("classification_confidence", 0.0)
@@ -381,6 +454,7 @@ async def handle_book(env, body: dict):
 
     jobs = await load_jobs(env, tech_id)
     if overlaps(start, end, jobs):
+        log_event("booking_conflict", tech_id=tech_id, start=start.isoformat())
         return Response.json({"error": "SLOT_TAKEN"}, status=409)
 
     booking_id = f"bk-{uuid.uuid4().hex[:8]}"
@@ -434,6 +508,14 @@ async def handle_book(env, body: dict):
         "booked_at": job["booked_at"],
     }
     await env.CALLERS.put(f"booking:{booking_id}", json.dumps(booking))
+    log_event(
+        "booking_created",
+        booking_id=booking_id,
+        tech_id=tech_id,
+        start=start.isoformat(),
+        status=booking_status,
+        after_hours=after_hours,
+    )
     return Response.json({"booked": True, **booking})
 
 
@@ -464,7 +546,7 @@ async def set_job_status(env, tech_id: str, job_id: str, status: str) -> None:
 
 async def handle_booking_update(env, body: dict):
     booking_id = normalize_booking_id(body.get("booking_id", ""))
-    action = str(body.get("action", "")).strip().lower()
+    action = str(body.get("action") or "").strip().lower()
     if not booking_id:
         return Response.json({"error": "BOOKING_ID_REQUIRED"}, status=400)
     stored = await env.CALLERS.get(f"booking:{booking_id}")
@@ -502,9 +584,9 @@ async def handle_booking_update(env, body: dict):
         return Response.json({"updated": True, **booking})
 
     if action == "reschedule":
-        tech_id = str(body.get("tech_id", "")).strip()
-        start = parse_time(str(body.get("start", "")).strip())
-        end = parse_time(str(body.get("end", "")).strip())
+        tech_id = str(body.get("tech_id") or "").strip()
+        start = parse_time(str(body.get("start") or "").strip())
+        end = parse_time(str(body.get("end") or "").strip())
         if not tech_id or not start or not end or end <= start:
             return Response.json({"error": "MISSING_FIELDS"}, status=400)
 

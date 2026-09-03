@@ -8,7 +8,7 @@ from workers import Response
 
 
 async def handle_note(env, body: dict):
-    note = str(body.get("note", "")).strip()
+    note = str(body.get("note") or "").strip()
     if not note:
         return Response.json({"error": "NOTE_REQUIRED"}, status=400)
 
@@ -16,8 +16,8 @@ async def handle_note(env, body: dict):
     record = {
         "note_id": note_id,
         "note": note,
-        "name": str(body.get("name", "")).strip(),
-        "contact": str(body.get("contact", "")).strip(),
+        "name": str(body.get("name") or "").strip(),
+        "contact": str(body.get("contact") or "").strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await env.CALLERS.put(f"note:{note_id}", json.dumps(record))

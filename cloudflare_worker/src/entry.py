@@ -4,11 +4,13 @@ Endpoint handlers live in callers.py, service_requests.py, scheduling.py,
 notes.py, and seed.py. Commercial classification lives in commercial_services.py.
 """
 
+import traceback
 from urllib.parse import urlparse
 
 from workers import Response, WorkerEntrypoint
 
 from callers import handle_lookup, handle_remember
+from observability import log_event
 from dashboard import handle_dashboard, handle_emergency_queue
 from service_requests import handle_service_request
 from scheduling import (
@@ -53,23 +55,32 @@ class Default(WorkerEntrypoint):
         except ValueError:
             return Response.json({"error": "INVALID_JSON"}, status=400)
 
-        if path == "/lookup":
-            return await handle_lookup(self.env, body)
-        if path == "/remember":
-            return await handle_remember(self.env, body)
-        if path == "/service-request":
-            return await handle_service_request(self.env, body)
-        if path == "/availability":
-            return await handle_availability(self.env, body)
-        if path == "/book":
-            return await handle_book(self.env, body)
-        if path == "/booking-lookup":
-            return await handle_booking_lookup(self.env, body)
-        if path == "/booking-update":
-            return await handle_booking_update(self.env, body)
-        if path == "/note":
-            return await handle_note(self.env, body)
-        if path == "/seed":
-            return await handle_seed(self.env)
+        try:
+            if path == "/lookup":
+                return await handle_lookup(self.env, body)
+            if path == "/remember":
+                return await handle_remember(self.env, body)
+            if path == "/service-request":
+                return await handle_service_request(self.env, body)
+            if path == "/availability":
+                return await handle_availability(self.env, body)
+            if path == "/book":
+                return await handle_book(self.env, body)
+            if path == "/booking-lookup":
+                return await handle_booking_lookup(self.env, body)
+            if path == "/booking-update":
+                return await handle_booking_update(self.env, body)
+            if path == "/note":
+                return await handle_note(self.env, body)
+            if path == "/seed":
+                return await handle_seed(self.env)
+        except Exception as error:
+            log_event(
+                "unhandled_error",
+                path=path,
+                error=f"{type(error).__name__}: {error}",
+                traceback=traceback.format_exc(),
+            )
+            return Response.json({"error": "INTERNAL_ERROR"}, status=500)
 
         return Response.json({"error": "NOT_FOUND"}, status=404)

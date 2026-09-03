@@ -11,13 +11,13 @@ VALID_PROPERTY_TYPES = {"residential", "commercial"}
 
 
 async def handle_service_request(env, body: dict):
-    property_type = str(body.get("property_type", "")).strip().lower()
+    property_type = str(body.get("property_type") or "").strip().lower()
     required = {
-        "customer_name": str(body.get("customer_name", "")).strip(),
-        "customer_phone": str(body.get("customer_phone", "")).strip(),
-        "address": str(body.get("address", "")).strip(),
-        "issue_description": str(body.get("issue_description", "")).strip(),
-        "review_reason": str(body.get("review_reason", "")).strip().upper(),
+        "customer_name": str(body.get("customer_name") or "").strip(),
+        "customer_phone": str(body.get("customer_phone") or "").strip(),
+        "address": str(body.get("address") or "").strip(),
+        "issue_description": str(body.get("issue_description") or "").strip(),
+        "review_reason": str(body.get("review_reason") or "").strip().upper(),
     }
     if property_type not in VALID_PROPERTY_TYPES:
         return Response.json({"error": "INVALID_PROPERTY_TYPE"}, status=400)
@@ -25,16 +25,16 @@ async def handle_service_request(env, body: dict):
         return Response.json({"error": "MISSING_FIELDS"}, status=400)
 
     commercial_fields = {
-        "business_name": str(body.get("business_name", "")).strip(),
-        "site_contact_name": str(body.get("site_contact_name", "")).strip(),
-        "site_contact_phone": str(body.get("site_contact_phone", "")).strip(),
+        "business_name": str(body.get("business_name") or "").strip(),
+        "site_contact_name": str(body.get("site_contact_name") or "").strip(),
+        "site_contact_phone": str(body.get("site_contact_phone") or "").strip(),
         "service_code": str(
             body.get("service_code", "other_or_unclear")
         ).strip(),
         "classification_confidence": body.get("classification_confidence", 0.0),
-        "equipment_details": str(body.get("equipment_details", "")).strip(),
-        "operational_impact": str(body.get("operational_impact", "")).strip(),
-        "access_notes": str(body.get("access_notes", "")).strip(),
+        "equipment_details": str(body.get("equipment_details") or "").strip(),
+        "operational_impact": str(body.get("operational_impact") or "").strip(),
+        "access_notes": str(body.get("access_notes") or "").strip(),
     }
     if property_type == "commercial" and not all(
         commercial_fields[field]
@@ -51,9 +51,9 @@ async def handle_service_request(env, body: dict):
         "emergency_reason_code": str(
             body.get("emergency_reason_code", "")
         ).strip(),
-        "emergency_reason": str(body.get("emergency_reason", "")).strip(),
+        "emergency_reason": str(body.get("emergency_reason") or "").strip(),
         **commercial_fields,
-        "preferred_time": str(body.get("preferred_time", "")).strip(),
+        "preferred_time": str(body.get("preferred_time") or "").strip(),
         "status": "STAFF_REVIEW",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
