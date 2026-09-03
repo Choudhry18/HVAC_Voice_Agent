@@ -81,6 +81,11 @@ When reading an address aloud, say "and the zip code is" before the ZIP code, fo
 When saying an email address, speak each letter separated by spaces, say "at" for the @ sign and "dot" for periods, for example: "t e a m at revin dot a i". Never join letters with hyphens.
 """
 
+CALLER_NUMBER_INSTRUCTIONS = """
+The caller is calling from {caller_number}.
+If they want to be reached at the number they are calling from, read it back and have them confirm it as the callback number.
+""".strip()
+
 RETURNING_CALLER_INSTRUCTIONS = """
 This phone number matches a previous customer named {name}
 Ask if you are speaking with {name}.

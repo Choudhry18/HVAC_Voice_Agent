@@ -40,7 +40,7 @@ def format_confirmation(booking: dict[str, object]) -> tuple[str, str, str]:
     if surcharge_line:
         text_lines.extend(["", surcharge_line])
     text_lines.extend(
-        ["", "Call +1 (484) 398-5113 and give your booking ID to make changes."]
+        ["", "Call +1 (484) 295-0246 and give your booking ID to make changes."]
     )
 
     detail_rows = "".join(
@@ -57,7 +57,7 @@ def format_confirmation(booking: dict[str, object]) -> tuple[str, str, str]:
         f"<p>{opening}</p>"
         f"<table style='border-collapse:collapse'>{detail_rows}</table>"
         f"{surcharge_html}"
-        "<p>Call +1 (484) 398-5113 and give your booking ID to make changes.</p>"
+        "<p>Call +1 (484) 295-0246 and give your booking ID to make changes.</p>"
         "</div>"
     )
 

@@ -26,6 +26,7 @@ from prompts import (
     LOAD_CUSTOMER_RECORD_DESCRIPTION,
     BASE_INSTRUCTIONS,
     BOOK_APPOINTMENT_DESCRIPTION,
+    CALLER_NUMBER_INSTRUCTIONS,
     CHECK_SERVICE_LOCATION_DESCRIPTION,
     END_CALL_GOODBYE_INSTRUCTIONS,
     FIND_APPOINTMENT_SLOTS_DESCRIPTION,
@@ -50,8 +51,6 @@ from weather_service import get_current_weather
 load_dotenv()
 
 MAINTENANCE_FOLLOWUP_DAYS = 60
-# Console runs have no SIP participant, so fall back to a test number there.
-CONSOLE_TEST_PHONE = "+12105550199"
 
 
 def customer_memory_phone_numbers(
@@ -120,10 +119,16 @@ class HVACFrontDeskAgent(Agent):
                 name=previous_customer.get("name")
             )
 
+        instructions = BASE_INSTRUCTIONS.format(
+            returning_caller_instructions=returning_caller_instructions
+        ).strip()
+        if phone_number:
+            instructions += "\n" + CALLER_NUMBER_INSTRUCTIONS.format(
+                caller_number=phone_number
+            )
+
         super().__init__(
-            instructions=BASE_INSTRUCTIONS.format(
-                returning_caller_instructions=returning_caller_instructions
-            ).strip(),
+            instructions=instructions,
             tools=[
                 EndCallTool(
                     delete_room=True,
@@ -391,11 +396,7 @@ class HVACFrontDeskAgent(Agent):
             start=start,
             end=end,
             customer_name=customer_name,
-            customer_phone=(
-                confirmed_callback_number
-                or self.phone_number
-                or CONSOLE_TEST_PHONE
-            ),
+            customer_phone=confirmed_callback_number or self.phone_number or "",
             address=address,
             summary=summary,
             is_emergency=bool(
@@ -461,7 +462,7 @@ class HVACFrontDeskAgent(Agent):
                 or address
             )
         confirmed_callback_number = (
-            callback_number.strip() or self.phone_number or CONSOLE_TEST_PHONE
+            callback_number.strip() or self.phone_number or ""
         )
         result = await save_service_request(
             customer_name=customer_name,
@@ -674,7 +675,7 @@ async def hvac_front_desk(ctx: agents.JobContext) -> None:
     previous_customer = await lookup_customer(phone_number)
     session = AgentSession(
         stt=inference.STT(model="deepgram/nova-3", language="en"),
-        llm=inference.LLM(model="google/gemma-4-31b-it"),
+        llm=inference.LLM(model="google/gemini-3.7-flash"),
         tts=inference.TTS(model="inworld/inworld-tts-2", voice="Ashley"),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
