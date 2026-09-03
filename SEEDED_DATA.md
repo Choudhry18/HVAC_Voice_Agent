@@ -21,6 +21,31 @@ The service area is based on the nearest of these three locations, with a **35-m
 
 Commercial appointments may last 2–4 hours depending on the service. Standard appointment windows must finish by 5:00 PM. Every request is automatically assessed for emergency status using the reported issue, escalation context, property type, equipment details, and available weather information. Outside office hours, a qualifying emergency is automatically offered an after-hours dispatch when a qualified on-call technician is available. The caller must still accept the possible higher cost and confirm the details before it is booked. If no qualified on-call technician is available, the request is sent for staff review.
 
+## Test addresses
+
+All addresses below were verified against the live address-validation pipeline. Use them when calling the agent to exercise each path.
+
+### In service area
+
+| Address | Nearest location | Good for |
+| --- | --- | --- |
+| 300 Alamo Plaza, San Antonio, TX 78205 | Downtown (0.5 mi) | Commercial (The Alamo) |
+| 117 King William St, San Antonio, TX 78204 | Downtown (0.5 mi) | Residential |
+| 1 Trinity Place, San Antonio, TX 78212 | Downtown (2.4 mi) | Commercial (university campus) |
+| 18402 Bullis Hill, San Antonio, TX 78258 | Stone Oak (6.1 mi) | Residential |
+| 700 E Sonterra Blvd Suite 1117, San Antonio, TX 78258 | Stone Oak (3.3 mi) | Commercial (office plaza) |
+| 11600 FM 471 W, San Antonio, TX 78253 | Alamo Ranch (1.0 mi) | Commercial (high school) |
+| 12403 Maverick Ranch, San Antonio, TX 78254 | Alamo Ranch (2.7 mi) | Residential |
+| 11934 Pitcher Rd, San Antonio, TX 78253 | Alamo Ranch (2.4 mi) | Residential |
+
+### Special validation paths
+
+| Address | Behavior |
+| --- | --- |
+| 700 E Sonterra Blvd, San Antonio, TX 78258 (no suite) | Agent asks for a suite or unit number before accepting |
+| 100 Congress Ave, Austin, TX 78701 | Verified but ~60 mi outside the service area — request goes to staff review |
+| Any made-up street (e.g. "999 Fakestreet Lane") | Cannot be verified — details recorded for a representative follow-up |
+
 ## Seeded technicians and commercial specialties
 
 ### Downtown San Antonio
